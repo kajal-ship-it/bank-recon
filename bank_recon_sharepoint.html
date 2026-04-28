@@ -1,0 +1,1290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Easyship Bank Reconciliation Platform</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;background:#f8f8f6;color:#1a1a1a}
+input,select,textarea{padding:5px 8px;border:0.5px solid #ccc;border-radius:5px;font-size:12px;background:#fff;color:#1a1a1a;outline:none;width:100%}
+input:focus,select:focus{border-color:#185fa5}
+button{cursor:pointer;font-family:inherit;font-size:11px;border-radius:5px;padding:5px 10px;border:0.5px solid #ccc;background:#fff;color:#1a1a1a;white-space:nowrap}
+button:hover{opacity:0.8}
+button:disabled{opacity:0.4;cursor:not-allowed}
+.badge{font-size:11px;padding:2px 7px;border-radius:4px;font-weight:500;white-space:nowrap;display:inline-block}
+.card{background:#fff;border:0.5px solid #e0e0e0;border-radius:8px;padding:12px 16px}
+.metric{background:#f5f5f3;border-radius:7px;padding:10px 12px}
+.tab-btn{padding:8px 14px;border:none;border-bottom:2px solid transparent;background:transparent;cursor:pointer;font-size:12px;color:#888;white-space:nowrap}
+.tab-btn.active{border-bottom-color:#1a1a1a;color:#1a1a1a;font-weight:500}
+.notice{background:#e6f1fb;border:0.5px solid #b5d4f4;border-radius:7px;padding:10px 14px;font-size:12px;color:#185fa5;margin-bottom:1rem}
+.warn{background:#faeeda;border:0.5px solid #fac775;border-radius:7px;padding:10px 14px;font-size:12px;color:#854f0b;margin-bottom:1rem}
+.err{background:#fcebeb;border:0.5px solid #f7c1c1;border-radius:7px;padding:10px 14px;font-size:12px;color:#a32d2d;margin-bottom:1rem}
+.ok{background:#eaf3de;border:0.5px solid #c0dd97;border-radius:7px;padding:10px 14px;font-size:12px;color:#3b6d11;margin-bottom:1rem}
+.tbl-wrap{overflow-x:auto;border:0.5px solid #e0e0e0;border-radius:8px;max-height:60vh;overflow-y:auto}
+.tbl-wrap table{width:100%;border-collapse:collapse;font-size:11px}
+.tbl-wrap thead th{position:sticky;top:0;z-index:10;background:#f5f5f3;padding:7px 8px;text-align:left;font-weight:500;color:#666;white-space:nowrap;border-bottom:0.5px solid #e0e0e0}
+.tbl-wrap td{padding:6px 8px;border-bottom:0.5px solid #f0f0ee;vertical-align:middle}
+.tbl-wrap tr.green{background:#f0faf0}
+.tbl-wrap tr.amber{background:#fffbf0}
+.tbl-wrap tr.red{background:#fff8f8}
+.tbl-wrap tr.grey{background:#f8f8f6;opacity:0.5}
+.row-ok{border-left:3px solid #3b6d11}
+.row-amber{border-left:3px solid #e6a817}
+.row-red{border-left:3px solid #e24b4a}
+.search-drop{position:absolute;z-index:100;background:#fff;border:0.5px solid #ccc;border-radius:5px;max-height:200px;overflow-y:auto;width:220px;box-shadow:0 4px 12px rgba(0,0,0,0.1)}
+.search-drop div{padding:6px 10px;cursor:pointer;font-size:11px}
+.search-drop div:hover{background:#f0f6ff}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200;display:flex;align-items:center;justify-content:center}
+.modal{background:#fff;border-radius:10px;padding:1.5rem;min-width:400px;max-width:600px;width:90%}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback,useMemo}=React;
+
+// ── CONFIG ────────────────────────────────────────────────────
+const SHAREPOINT_SITE_URL="https://easyship1.sharepoint.com/sites/FinanceAccounting";
+const ADMIN_EMAIL="kajal@easyship.com";
+const RULES_LIST="BankReconRules";
+
+// ── ENTITIES ─────────────────────────────────────────────────
+const ENTITIES_DATA=[
+  {name:"Goeasyship Fulfillment Service NL",account:"626001973",currency:"EUR",bankName:"JP MORGAN"},
+  {name:"Easyship FS UK Limited",account:"76971451",currency:"EUR",bankName:"JP MORGAN EUR"},
+  {name:"Easyship FS UK Limited",account:"16237358",currency:"GBP",bankName:"JP MORGAN GBP"},
+  {name:"Easyship PTE.LTD (Singapore)",account:"8830035790",currency:"SGD",bankName:"JP MORGAN SGD"},
+  {name:"Easyship fulf.Serv Pty Ltd AU",account:"86007245",currency:"AUD",bankName:"JP MORGAN"},
+  {name:"EASYSHIP FULFIL.SPTY LTD(NZ)",account:"2600330790",currency:"NZD",bankName:"JP MORGAN NZD"},
+  {name:"Easyship Fulfillment Srvs HK",account:"6300146930",currency:"HKD",bankName:"JP MORGAN HKD"},
+  {name:"Easyship Fulfillment Srvs HK",account:"6300147094",currency:"USD",bankName:"JP MORGAN USD"},
+  {name:"Easyship Inc",account:"000000771620728",currency:"USD",bankName:"JP MORGAN USD 0728"},
+  {name:"Easyship Inc",account:"000000866781328",currency:"USD",bankName:"JP MORGAN USD 1328"},
+  {name:"Enovie Simple Canada Inc.",account:"4011771225",currency:"CAD",bankName:"JP MORGAN USD 1225"},
+  {name:"Enovie Simple Canada Inc.",account:"4011816694",currency:"CAD",bankName:"JP MORGAN USD 6694"},
+  {name:"Enovie Simple Canada Inc.",account:"4011816695",currency:"USD",bankName:"JP MORGAN USD 6695"},
+  {name:"GOSINCRO CANADA INC.",account:"4011816697",currency:"CAD",bankName:"JP MORGAN CAD"},
+  {name:"Go Sincro UK Limited",account:"0076901739",currency:"GBP",bankName:"JP MORGAN GS UK"},
+  {name:"Go Sincro Inc.",account:"000000888658306",currency:"USD",bankName:"JP MORGAN"},
+];
+
+// ── IGNORED ──────────────────────────────────────────────────
+const IGNORED_ACCOUNTS=["6300154801","000000733210366"];
+const IGNORED_DESC_PATTERNS=[
+  "OPENING LEDGER BALANCE","OPENING AVAILABLE BALANCE","CLOSING LEDGER BALANCE",
+  "CLOSING BALANCE SAME DAY","CLOSING AVAILABLE BALANCE","AVG CLOSING AVAILABLE BAL MTD",
+  "AVG CLOSING AVAILABLE BAL YTD","1-DAY FLOAT","1 DAY FLOAT","AGGREGATE FLOAT ADJUSTMENT",
+  "2 OR MORE DAYS FLOAT","CLOSING BALANCE - 3+","TOTAL CREDIT NUMBER","TOTAL CREDITS",
+  "TOTAL DEBIT NUMBER","TOTAL DEBITS","TOTAL CREDIT AMOUNT","TOTAL DEBIT AMOUNT",
+  "TOTAL ACH RELATED","CLOSING LEDGER","CLOSING BALANCE","AGGREGATE FLOAT",
+  "NUMBER OF CREDITS","NUMBER OF DEBITS","AVERAGE LEDGER","AVERAGE COLLECTED",
+];
+
+const DOC_TYPES=["Payment","Invoice","Credit Memo","Finance Charge Memo","Reminder","Refund"];
+const ACCOUNT_TYPES=["Vendor","Customer","G/L Account","Bank Account","Fixed Asset","IC Partner","Employee","Allocation Account"];
+const BAL_ACCOUNT_TYPES=["Bank Account","G/L Account","Customer","Vendor","Fixed Asset","IC Partner","Employee","Allocation Account"];
+const TABS=["Upload & Review","Rules Engine","Master Data","Reconciliation","Team Dashboard"];
+
+// ── SHAREPOINT ────────────────────────────────────────────────
+const spH={"Accept":"application/json;odata=nometadata","Content-Type":"application/json;odata=nometadata"};
+async function spDigest(){
+  const r=await fetch(`${SHAREPOINT_SITE_URL}/_api/contextinfo`,{method:"POST",headers:spH,credentials:"include"});
+  const d=await r.json(); return d.FormDigestValue;
+}
+async function spGet(list,select=""){
+  const url=`${SHAREPOINT_SITE_URL}/_api/web/lists/getbytitle('${list}')/items?${select}&$top=2000`;
+  const r=await fetch(url,{headers:spH,credentials:"include"});
+  if(!r.ok)throw new Error("SP error");
+  const d=await r.json(); return d.value||[];
+}
+async function spAdd(list,body){
+  const digest=await spDigest();
+  const r=await fetch(`${SHAREPOINT_SITE_URL}/_api/web/lists/getbytitle('${list}')/items`,
+    {method:"POST",headers:{...spH,"X-RequestDigest":digest},body:JSON.stringify(body),credentials:"include"});
+  if(!r.ok)throw new Error("Add failed");
+  const d=await r.json(); return d.Id;
+}
+async function spDel(list,id){
+  const digest=await spDigest();
+  await fetch(`${SHAREPOINT_SITE_URL}/_api/web/lists/getbytitle('${list}')/items(${id})`,
+    {method:"DELETE",headers:{...spH,"X-RequestDigest":digest,"IF-MATCH":"*"},credentials:"include"});
+}
+async function spUpdate(list,id,body){
+  const digest=await spDigest();
+  await fetch(`${SHAREPOINT_SITE_URL}/_api/web/lists/getbytitle('${list}')/items(${id})`,
+    {method:"PATCH",headers:{...spH,"X-RequestDigest":digest,"IF-MATCH":"*"},body:JSON.stringify(body),credentials:"include"});
+}
+async function getCurrentUser(){
+  try{
+    const r=await fetch(`${SHAREPOINT_SITE_URL}/_api/web/currentuser?$select=Email`,{headers:spH,credentials:"include"});
+    const d=await r.json(); return(d.Email||"").toLowerCase();
+  }catch(e){return"";}
+}
+
+// ── HELPERS ───────────────────────────────────────────────────
+const fmt=(n)=>{
+  const abs=Math.abs(n);
+  return abs>=1000000?"$"+(abs/1000000).toFixed(2)+"M":abs>=1000?"$"+(abs/1000).toFixed(1)+"K":"$"+abs.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+};
+const fmtFull=(n)=>"$"+Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const Bdg=({text,bg,color,style={}})=><span className="badge" style={{background:bg,color,...style}}>{text}</span>;
+
+const isIgnoredRow=(desc,acct)=>{
+  if(IGNORED_ACCOUNTS.includes((acct||"").trim()))return true;
+  const d=(desc||"").toUpperCase().trim();
+  return IGNORED_DESC_PATTERNS.some(p=>d.includes(p.toUpperCase()));
+};
+
+const isClosingBalance=(desc)=>{
+  const d=(desc||"").toUpperCase();
+  return d.includes("CLOSING LEDGER BALANCE")||d.includes("CLOSING AVAILABLE BALANCE");
+};
+
+function parseJPM(text,rules,memory){
+  const results=Papa.parse(text,{header:true,skipEmptyLines:true});
+  const rows=results.data;
+  const closingBalances={};
+  const skipped=[];
+  const unmatched=[];
+  const parsed=[];
+  const seen=new Set();
+
+  rows.forEach((row,i)=>{
+    const acct=(row["Account Number"]||row["account number"]||"").trim();
+    const desc=(row["Description"]||row["description"]||"").trim();
+    const dateVal=row["Transaction Date"]||row["transaction date"]||row["Date"]||"";
+    const creditVal=row["Credit Amount"]||row["credit amount"]||"";
+    const debitVal=row["Debit Amount"]||row["debit amount"]||"";
+    const refVal=row["Customer Reference"]||row["Bank Reference"]||row["customer reference"]||row["bank reference"]||"";
+    const currency=row["Currency"]||row["currency"]||"";
+
+    // collect closing balance
+    if(isClosingBalance(desc)){
+      const amt=parseFloat((creditVal||debitVal||"").replace(/[$,]/g,""))||0;
+      if(amt>0&&acct) closingBalances[acct]=amt;
+    }
+
+    // skip ignored rows
+    if(isIgnoredRow(desc,acct)){skipped.push({desc,acct,reason:"Summary/balance row"});return;}
+    if(!desc&&!dateVal)return;
+
+    // remarks scan for vendor hint
+    const remarks=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+      .map(n=>row[`Remarks ${n}`]||row[`remarks ${n}`]||"")
+      .filter(Boolean).join(" | ");
+    const fullDesc=remarks?`${desc} | ${remarks}`:desc;
+
+    const c=parseFloat((creditVal||"").replace(/[$,]/g,""))||0;
+    const d=parseFloat((debitVal||"").replace(/[$,]/g,""))||0;
+    if(c===0&&d===0){skipped.push({desc,acct,reason:"Zero amount"});return;}
+
+    const amount=c>0?c:d;
+    const type=c>0?"Cash Receipt":"Payment Journal";
+
+    const matchedEntity=ENTITIES_DATA.find(e=>
+      e.account.replace(/^0+/,"")===acct.replace(/^0+/,"")
+    );
+    if(!matchedEntity){unmatched.push({acct,desc});return;}
+
+    // duplicate check
+    const dupKey=`${dateVal}|${desc}|${amount}|${acct}`;
+    const isDuplicate=seen.has(dupKey);
+    seen.add(dupKey);
+
+    // apply rules
+    let bestRule=null,bestScore=0;
+    for(const r of rules){
+      if(r.entity&&r.entity!==matchedEntity.name)continue;
+      let score=0;
+      if(r.descContains&&fullDesc.toLowerCase().includes(r.descContains.toLowerCase()))score+=60;
+      if(r.type&&r.type===type)score+=20;
+      if(r.amountMin&&amount>=parseFloat(r.amountMin))score+=10;
+      if(r.amountMax&&amount<=parseFloat(r.amountMax))score+=10;
+      if(score>bestScore){bestScore=score;bestRule=r;}
+    }
+
+    // memory suggestion
+    const memKey=desc.slice(0,30).toLowerCase();
+    const memMatch=memory[memKey];
+
+    const autoApproved=bestRule&&bestScore>=80;
+    const rowColor=autoApproved?"green":memMatch?"amber":"red";
+
+    parsed.push({
+      id:`txn-${Date.now()}-${i}`,
+      date:dateVal,description:fullDesc,rawDesc:desc,
+      amount,type,currency:currency||matchedEntity.currency,
+      reference:refVal,bankAccount:acct,
+      entity:matchedEntity.name,
+      status:autoApproved?"approved":"pending",
+      accountType:bestRule?.accountType||memMatch?.accountType||"",
+      accountNo:bestRule?.accountNo||memMatch?.accountNo||"",
+      balAccountType:bestRule?.balAccountType||"Bank Account",
+      balAccountNo:bestRule?.balAccountNo||matchedEntity.bankName,
+      documentType:type==="Payment Journal"?"Payment":"Refund",
+      confidence:bestScore,matchedRule:bestRule?.name||null,
+      memSuggestion:memMatch||null,rowColor,isDuplicate,
+      isSplit:false,splits:[],
+    });
+  });
+
+  return{parsed,skipped,unmatched,closingBalances};
+}
+
+function exportToCSV(rows,filename){
+  const headers=["Posting Date","Document Date","Document Type","Document No.",
+    "External Document No.","Account Type","Account No.","Description",
+    "Amount","Amount ($)","Bal. Account Type","Bal. Account No."];
+  const lines=[headers.join(","),...rows.map((r,i)=>[
+    r.date,r.date,r.documentType,"",r.reference||"",
+    r.accountType,r.accountNo,`"${(r.rawDesc||r.description).replace(/"/g,'""')}"`,
+    r.type==="Payment Journal"?-r.amount:r.amount,
+    r.type==="Payment Journal"?-r.amount:r.amount,
+    r.balAccountType,r.balAccountNo
+  ].join(","))];
+  const blob=new Blob([lines.join("\n")],{type:"text/csv"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=filename;a.click();
+}
+
+function exportDiagnostic(txns,skipped,unmatched,alerts){
+  const lines=["EASYSHIP BANK RECONCILIATION — DIAGNOSTIC REPORT",
+    `Generated: ${new Date().toLocaleString()}`,
+    "",
+    "=== UNMATCHED BANK ACCOUNTS ===",
+    ...unmatched.map(u=>`Account: ${u.acct} | Sample desc: ${u.desc}`),
+    "",
+    "=== SKIPPED ROWS (${skipped.length}) ===",
+    ...skipped.slice(0,50).map(s=>`${s.desc} | ${s.reason}`),
+    "",
+    "=== TRANSACTIONS MISSING ACCOUNT NO. ===",
+    ...txns.filter(t=>!t.accountNo).map(t=>`${t.date} | ${t.entity} | ${t.description} | ${fmtFull(t.amount)}`),
+    "",
+    "=== FLAGGED TRANSACTIONS ===",
+    ...txns.filter(t=>t.status==="flagged").map(t=>`${t.date} | ${t.entity} | ${t.description} | ${fmtFull(t.amount)}`),
+    "",
+    "=== DUPLICATE TRANSACTIONS ===",
+    ...txns.filter(t=>t.isDuplicate).map(t=>`${t.date} | ${t.entity} | ${t.description} | ${fmtFull(t.amount)}`),
+    "",
+    "=== ALERTS ===",
+    ...alerts.map(a=>`[${a.type}] ${a.msg}`),
+  ];
+  const blob=new Blob([lines.join("\n")],{type:"text/plain"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`Diagnostic_${new Date().toISOString().slice(0,10)}.txt`;a.click();
+}
+
+// ── SEARCH DROPDOWN ───────────────────────────────────────────
+function SearchDrop({items,value,onChange,placeholder,onAdd,addLabel}){
+  const [q,setQ]=useState(value||"");
+  const [open,setOpen]=useState(false);
+  const ref=useRef();
+  const filtered=useMemo(()=>
+    items.filter(i=>(i.label||"").toLowerCase().includes(q.toLowerCase())).slice(0,50)
+  ,[items,q]);
+  useEffect(()=>{
+    const h=(e)=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);
+  },[]);
+  return(
+    <div ref={ref} style={{position:"relative",width:"100%"}}>
+      <input value={q} onChange={e=>{setQ(e.target.value);setOpen(true);onChange("");}}
+        onFocus={()=>setOpen(true)} placeholder={placeholder} style={{width:"100%"}}/>
+      {open&&(q.length>=1)&&(
+        <div className="search-drop">
+          {filtered.map((it,i)=>(
+            <div key={i} onMouseDown={()=>{setQ(it.label);onChange(it.value);setOpen(false);}}>
+              <span style={{color:"#185fa5",fontWeight:500}}>{it.value}</span> — {it.name}
+            </div>
+          ))}
+          {onAdd&&(
+            <div onMouseDown={()=>{onAdd(q);setOpen(false);}} style={{borderTop:"0.5px solid #eee",color:"#3b6d11",fontWeight:500}}>
+              + Add "{q}" as new {addLabel}
+            </div>
+          )}
+          {filtered.length===0&&!onAdd&&<div style={{color:"#aaa"}}>No results</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SPLIT MODAL ───────────────────────────────────────────────
+function SplitModal({txn,vendors,customers,glAccounts,entity,onSave,onClose}){
+  const [splits,setSplits]=useState([
+    {accountType:"Vendor",accountNo:"",accountName:"",amount:"",description:txn.rawDesc||txn.description,documentType:txn.documentType}
+  ]);
+  const total=splits.reduce((s,sp)=>s+parseFloat(sp.amount||0),0);
+  const diff=Math.abs(txn.amount-total);
+  const addSplit=()=>setSplits(p=>[...p,{accountType:"Vendor",accountNo:"",accountName:"",amount:"",description:txn.rawDesc||txn.description,documentType:txn.documentType}]);
+  const upd=(i,k,v)=>setSplits(p=>p.map((s,j)=>j===i?{...s,[k]:v}:s));
+  return(
+    <div className="modal-bg">
+      <div className="modal">
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem"}}>
+          <h3 style={{fontSize:15,fontWeight:500}}>Split transaction</h3>
+          <button onClick={onClose}>✕</button>
+        </div>
+        <div style={{fontSize:12,color:"#888",marginBottom:"0.75rem"}}>
+          Total: <strong style={{color:"#1a1a1a"}}>{fmtFull(txn.amount)}</strong> · 
+          Allocated: <strong style={{color:diff<0.01?"#3b6d11":"#a32d2d"}}>{fmtFull(total)}</strong> · 
+          Remaining: <strong style={{color:diff<0.01?"#3b6d11":"#a32d2d"}}>{fmtFull(txn.amount-total)}</strong>
+        </div>
+        {splits.map((sp,i)=>(
+          <div key={i} className="card" style={{marginBottom:8}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 80px",gap:6}}>
+              <div>
+                <label style={{fontSize:10,color:"#888",display:"block",marginBottom:2}}>Account Type</label>
+                <select value={sp.accountType} onChange={e=>upd(i,"accountType",e.target.value)}>
+                  {ACCOUNT_TYPES.map(a=><option key={a}>{a}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:"#888",display:"block",marginBottom:2}}>Account No.</label>
+                <input value={sp.accountNo} onChange={e=>upd(i,"accountNo",e.target.value)} placeholder="e.g. V-001"/>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:"#888",display:"block",marginBottom:2}}>Amount</label>
+                <input type="number" value={sp.amount} onChange={e=>upd(i,"amount",e.target.value)} placeholder="0.00"/>
+              </div>
+              <div style={{display:"flex",alignItems:"flex-end"}}>
+                {splits.length>1&&<button onClick={()=>setSplits(p=>p.filter((_,j)=>j!==i))} style={{color:"#a32d2d",border:"0.5px solid #f7c1c1",width:"100%"}}>Remove</button>}
+              </div>
+            </div>
+          </div>
+        ))}
+        <div style={{display:"flex",gap:8,marginTop:"0.75rem"}}>
+          <button onClick={addSplit} style={{background:"#e6f1fb",color:"#185fa5",border:"0.5px solid #b5d4f4"}}>+ Add line</button>
+          <button onClick={()=>onSave(splits)} disabled={diff>0.01} style={{background:"#eaf3de",color:"#3b6d11",border:"0.5px solid #c0dd97",marginLeft:"auto"}}>
+            {diff>0.01?`Save (${fmtFull(diff)} remaining)`:"Save splits"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────
+export default function App(){
+  const [tab,setTab]=useState(0);
+  const [txns,setTxns]=useState([]);
+  const [rules,setRules]=useState([]);
+  const [vendors,setVendors]=useState([]);
+  const [customers,setCustomers]=useState([]);
+  const [glAccounts,setGlAccounts]=useState([]);
+  const [extraEntities,setExtraEntities]=useState([]);
+  const [memory,setMemory]=useState({});
+  const [spStatus,setSpStatus]=useState("loading");
+  const [isAdmin,setIsAdmin]=useState(false);
+  const [alerts,setAlerts]=useState([]);
+  const [sessions,setSessions]=useState([]);
+  const [bookings,setBookings]=useState([]);
+  const [skippedRows,setSkippedRows]=useState([]);
+  const [unmatchedAccts,setUnmatchedAccts]=useState([]);
+  const [closingBals,setClosingBals]=useState({});
+  const [dragOver,setDragOver]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [splitTxn,setSplitTxn]=useState(null);
+  const [filterEntity,setFilterEntity]=useState("all");
+  const [filterStatus,setFilterStatus]=useState("all");
+  const [filterType,setFilterType]=useState("all");
+  const [filterCcy,setFilterCcy]=useState("all");
+  const [filterColor,setFilterColor]=useState("all");
+  const [dashEntity,setDashEntity]=useState(null);
+  const [newRule,setNewRule]=useState({name:"",descContains:"",type:"",accountType:"Vendor",accountNo:"",balAccountType:"Bank Account",balAccountNo:"",entity:"",amountMin:"",amountMax:""});
+  const [ruleMsg,setRuleMsg]=useState("");
+  const [masterTab,setMasterTab]=useState("vendors");
+  const [newMaster,setNewMaster]=useState({entity:"",no:"",name:""});
+  const [masterMsg,setMasterMsg]=useState("");
+  const [newEntityForm,setNewEntityForm]=useState({name:"",account:"",currency:"",bankName:""});
+  const [showNewEntity,setShowNewEntity]=useState(false);
+  const [exportMenu,setExportMenu]=useState(false);
+
+  const allEntities=useMemo(()=>[...ENTITIES_DATA,...extraEntities],[extraEntities]);
+
+  // load from SP + localStorage
+  useEffect(()=>{
+    (async()=>{
+      const email=await getCurrentUser();
+      setIsAdmin(email===ADMIN_EMAIL.toLowerCase());
+      try{
+        const rItems=await spGet(RULES_LIST,"$select=Id,Title,DescContains,JournalType,AccountType,AccountNo,BalAccountType,BalAccountNo,Entity,AmountMin,AmountMax");
+        setRules(rItems.map(i=>({id:String(i.Id),name:i.Title||"",descContains:i.DescContains||"",type:i.JournalType||"",accountType:i.AccountType||"Vendor",accountNo:i.AccountNo||"",balAccountType:i.BalAccountType||"Bank Account",balAccountNo:i.BalAccountNo||"",entity:i.Entity||"",amountMin:i.AmountMin||"",amountMax:i.AmountMax||""})));
+        setSpStatus("ok");
+      }catch(e){
+        setSpStatus("error");
+        try{const r=localStorage.getItem("brp_rules");if(r)setRules(JSON.parse(r));}catch(e){}
+      }
+      try{const s=localStorage.getItem("brp_sessions");if(s)setSessions(JSON.parse(s));}catch(e){}
+      try{const b=localStorage.getItem("brp_bookings");if(b)setBookings(JSON.parse(b));}catch(e){}
+      try{const m=localStorage.getItem("brp_memory");if(m)setMemory(JSON.parse(m));}catch(e){}
+      try{const v=localStorage.getItem("brp_vendors");if(v)setVendors(JSON.parse(v));}catch(e){}
+      try{const c=localStorage.getItem("brp_customers");if(c)setCustomers(JSON.parse(c));}catch(e){}
+      try{const g=localStorage.getItem("brp_gl");if(g)setGlAccounts(JSON.parse(g));}catch(e){}
+      try{const e=localStorage.getItem("brp_entities");if(e)setExtraEntities(JSON.parse(e));}catch(e){}
+    })();
+  },[]);
+
+  const saveLocal=(key,data)=>{try{localStorage.setItem(key,JSON.stringify(data));}catch(e){}};
+
+  const addAlert=(type,msg)=>{
+    const a={id:Date.now(),type,msg,time:new Date().toLocaleTimeString()};
+    setAlerts(p=>[a,...p].slice(0,50));
+  };
+
+  const handleFile=async(file)=>{
+    if(!file)return;
+    const text=await file.text();
+    const{parsed,skipped,unmatched,closingBalances}=parseJPM(text,rules,memory);
+    setTxns(parsed);
+    setSkippedRows(skipped);
+    setUnmatchedAccts(unmatched);
+    setClosingBals(closingBalances);
+    const newAlerts=[];
+    if(unmatched.length>0){
+      const msg=`${unmatched.length} bank account(s) not linked to any entity: ${unmatched.map(u=>u.acct).join(", ")}`;
+      newAlerts.push({id:Date.now(),type:"warning",msg,time:new Date().toLocaleTimeString()});
+      addAlert("warning",msg);
+    }
+    const missing=parsed.filter(t=>!t.accountNo);
+    if(missing.length>0){
+      const msg=`${missing.length} transaction(s) have no Account No. mapped`;
+      newAlerts.push({id:Date.now()+1,type:"info",msg,time:new Date().toLocaleTimeString()});
+      addAlert("info",msg);
+    }
+    const dups=parsed.filter(t=>t.isDuplicate);
+    if(dups.length>0){
+      const msg=`${dups.length} possible duplicate transaction(s) detected`;
+      addAlert("warning",msg);
+    }
+    const sess={id:`sess-${Date.now()}`,date:new Date().toLocaleDateString(),count:parsed.length,skipped:skipped.length,unmatched:unmatched.length,file:file.name};
+    const updSess=[sess,...sessions].slice(0,50);
+    setSessions(updSess);saveLocal("brp_sessions",updSess);
+    if(newAlerts.length>0){
+      alert(`Upload complete:\n• ${parsed.length} transactions loaded\n• ${skipped.length} summary rows filtered\n• ${unmatched.length} unmatched accounts\n• ${missing.length} need Account No.\n${dups.length>0?`• ${dups.length} possible duplicates`:""}`);
+    }
+  };
+
+  const updateTxn=(id,patch)=>setTxns(p=>p.map(t=>t.id===id?{...t,...patch}:t));
+
+  const okTxn=(t)=>{
+    const memKey=t.rawDesc.slice(0,30).toLowerCase();
+    const newMem={...memory,[memKey]:{accountType:t.accountType,accountNo:t.accountNo,balAccountType:t.balAccountType,balAccountNo:t.balAccountNo}};
+    setMemory(newMem);saveLocal("brp_memory",newMem);
+    updateTxn(t.id,{status:"booked",rowColor:"green"});
+    const newB=[...bookings,{...t,bookedAt:new Date().toLocaleString()}];
+    setBookings(newB);saveLocal("brp_bookings",newB);
+  };
+
+  const saveRuleLocal=async(rule)=>{
+    if(spStatus==="ok"){
+      try{
+        const id=await spAdd(RULES_LIST,{Title:rule.name,DescContains:rule.descContains,JournalType:rule.type,AccountType:rule.accountType,AccountNo:rule.accountNo,BalAccountType:rule.balAccountType,BalAccountNo:rule.balAccountNo,Entity:rule.entity,AmountMin:rule.amountMin||null,AmountMax:rule.amountMax||null});
+        return String(id);
+      }catch(e){}
+    }
+    const id=`rule-${Date.now()}`;
+    const updated=[...rules,{...rule,id}];
+    setRules(updated);saveLocal("brp_rules",updated);
+    return id;
+  };
+
+  const saveAndLearn=async(t)=>{
+    updateTxn(t.id,{status:"approved",rowColor:"green"});
+    setEditId(null);
+    if(t.accountType&&t.accountNo){
+      const r={name:`Auto: ${t.rawDesc?.slice(0,30)||t.description.slice(0,30)}`,descContains:t.rawDesc?.slice(0,25)||t.description.slice(0,25),type:t.type,accountType:t.accountType,accountNo:t.accountNo,balAccountType:t.balAccountType,balAccountNo:t.balAccountNo,entity:t.entity,amountMin:"",amountMax:""};
+      const id=await saveRuleLocal(r);
+      const updated=[...rules,{...r,id}];
+      setRules(updated);
+      setTxns(p=>p.map(tx=>tx.id===t.id?{...tx,matchedRule:r.name,confidence:80}:tx));
+    }
+  };
+
+  const doExport=(filter,filename)=>{
+    let rows=txns.filter(t=>t.status==="approved"||t.status==="booked");
+    if(filter==="payment")rows=rows.filter(t=>t.type==="Payment Journal");
+    if(filter==="receipt")rows=rows.filter(t=>t.type==="Cash Receipt");
+    if(filter==="flagged")rows=txns.filter(t=>t.status==="flagged");
+    if(filter==="rejected")rows=txns.filter(t=>t.status==="rejected");
+    if(filter==="unmatched")rows=txns.filter(t=>!t.accountNo);
+    if(typeof filter==="string"&&filter.startsWith("entity:"))rows=rows.filter(t=>t.entity===filter.slice(7));
+    if(rows.length===0){alert("No entries to export for this filter.");return;}
+    exportToCSV(rows,filename||`D365_Export_${new Date().toISOString().slice(0,10)}.csv`);
+  };
+
+  const filtered=useMemo(()=>txns.filter(t=>
+    (filterEntity==="all"||t.entity===filterEntity)&&
+    (filterStatus==="all"||t.status===filterStatus)&&
+    (filterType==="all"||t.type===filterType)&&
+    (filterCcy==="all"||t.currency===filterCcy)&&
+    (filterColor==="all"||t.rowColor===filterColor)
+  ),[txns,filterEntity,filterStatus,filterType,filterCcy,filterColor]);
+
+  const summary=useMemo(()=>({
+    total:txns.length,
+    approved:txns.filter(t=>t.status==="approved").length,
+    pending:txns.filter(t=>t.status==="pending").length,
+    flagged:txns.filter(t=>t.status==="flagged").length,
+    booked:txns.filter(t=>t.status==="booked").length,
+    rejected:txns.filter(t=>t.status==="rejected").length,
+    unmatched:txns.filter(t=>!t.accountNo).length,
+    green:txns.filter(t=>t.rowColor==="green").length,
+    amber:txns.filter(t=>t.rowColor==="amber").length,
+    red:txns.filter(t=>t.rowColor==="red").length,
+  }),[txns]);
+
+  const entityVendors=useMemo(()=>vendors.filter(v=>filterEntity==="all"||v.entity===filterEntity),[vendors,filterEntity]);
+  const entityCustomers=useMemo(()=>customers.filter(c=>filterEntity==="all"||c.entity===filterEntity),[customers,filterEntity]);
+  const entityGL=useMemo(()=>glAccounts.filter(g=>filterEntity==="all"||g.entity===filterEntity),[glAccounts,filterEntity]);
+
+  const vendorItems=useMemo(()=>vendors.map(v=>({value:v.no,name:v.name,label:`${v.no} ${v.name}`,entity:v.entity})),[vendors]);
+  const customerItems=useMemo(()=>customers.map(c=>({value:c.no,name:c.name,label:`${c.no} ${c.name}`,entity:c.entity})),[customers]);
+  const glItems=useMemo(()=>glAccounts.map(g=>({value:String(g.no),name:g.name,label:`${g.no} ${g.name}`,entity:g.entity})),[glAccounts]);
+
+  const getAccountItems=(t)=>{
+    const ent=t.entity;
+    if(t.accountType==="Vendor")return vendorItems.filter(i=>i.entity===ent);
+    if(t.accountType==="Customer")return customerItems.filter(i=>i.entity===ent);
+    if(t.accountType==="G/L Account")return glItems.filter(i=>i.entity===ent);
+    return[];
+  };
+
+  const importMasterCSV=async(file,type)=>{
+    if(!file)return;
+    const text=await file.text();
+    const results=Papa.parse(text,{header:true,skipEmptyLines:true,dynamicTyping:false});
+    const rows=results.data;
+    if(!rows.length){setMasterMsg("No data found in file.");return;}
+    const items=rows.map((r,i)=>{
+      const entity=r["Entity"]||r["Entity Name"]||r["entity"]||r["entity name"]||"";
+      const no=String(r["Vendor No"]||r["GL No."]||r["GL No"]||r["Customer No."]||r["no"]||r["No"]||"").trim();
+      const name=r["Vendor Name"]||r["GL Account"]||r["GL Account "]||r["Customer Name"]||r["name"]||r["Name"]||"";
+      return{id:`m-${Date.now()}-${i}`,entity:entity.trim(),no:no,name:(name||"").trim()};
+    }).filter(r=>r.no&&r.name);
+    if(type==="vendors"){
+      const u=[...vendors,...items.filter(ni=>!vendors.some(v=>v.no===ni.no&&v.entity===ni.entity))];
+      setVendors(u);saveLocal("brp_vendors",u);
+      setMasterMsg(`✅ Imported ${items.length} vendors (${u.length} total)`);
+    }
+    if(type==="gl"){
+      const u=[...glAccounts,...items.filter(ni=>!glAccounts.some(g=>g.no===ni.no&&g.entity===ni.entity))];
+      setGlAccounts(u);saveLocal("brp_gl",u);
+      setMasterMsg(`✅ Imported ${items.length} GL accounts (${u.length} total)`);
+    }
+    if(type==="customers"){
+      const u=[...customers,...items.filter(ni=>!customers.some(c=>c.no===ni.no&&c.entity===ni.entity))];
+      setCustomers(u);saveLocal("brp_customers",u);
+      setMasterMsg(`✅ Imported ${items.length} customers (${u.length} total)`);
+    }
+    setTimeout(()=>setMasterMsg(""),5000);
+  };
+
+  const addMasterItem=async()=>{
+    if(!newMaster.no||!newMaster.name||!newMaster.entity){setMasterMsg("Fill in all fields.");return;}
+    const item={id:`m-${Date.now()}`,entity:newMaster.entity,no:newMaster.no,name:newMaster.name};
+    if(masterTab==="vendors"){const u=[...vendors,item];setVendors(u);saveLocal("brp_vendors",u);}
+    if(masterTab==="customers"){const u=[...customers,item];setCustomers(u);saveLocal("brp_customers",u);}
+    if(masterTab==="gl"){const u=[...glAccounts,item];setGlAccounts(u);saveLocal("brp_gl",u);}
+    setNewMaster({entity:"",no:"",name:""});
+    setMasterMsg("Added successfully!");
+    setTimeout(()=>setMasterMsg(""),3000);
+  };
+
+  const delMasterItem=(type,id)=>{
+    if(!window.confirm("Delete this item?"))return;
+    if(type==="vendors"){const u=vendors.filter(v=>v.id!==id);setVendors(u);saveLocal("brp_vendors",u);}
+    if(type==="customers"){const u=customers.filter(c=>c.id!==id);setCustomers(u);saveLocal("brp_customers",u);}
+    if(type==="gl"){const u=glAccounts.filter(g=>g.id!==id);setGlAccounts(u);saveLocal("brp_gl",u);}
+  };
+
+  const addEntity=()=>{
+    if(!newEntityForm.name||!newEntityForm.account){alert("Name and account required.");return;}
+    const e={...newEntityForm,id:`ent-${Date.now()}`};
+    const u=[...extraEntities,e];setExtraEntities(u);saveLocal("brp_entities",u);
+    setNewEntityForm({name:"",account:"",currency:"",bankName:""});
+    setShowNewEntity(false);
+  };
+
+  const ccys=[...new Set(txns.map(t=>t.currency).filter(Boolean))];
+  const uniqueEntities=[...new Set(txns.map(t=>t.entity).filter(Boolean))];
+
+  // reconciliation per entity
+  const reconData=useMemo(()=>{
+    return allEntities.map(en=>{
+      const entTxns=[...txns,...bookings].filter(t=>t.entity===en.name);
+      const booked=entTxns.filter(t=>t.status==="booked");
+      const pending=entTxns.filter(t=>t.status!=="booked"&&t.status!=="rejected");
+      const totalTxn=entTxns.reduce((s,t)=>s+(t.type==="Cash Receipt"?t.amount:-t.amount),0);
+      const totalBooked=booked.reduce((s,t)=>s+(t.type==="Cash Receipt"?t.amount:-t.amount),0);
+      const closingBal=closingBals[en.account]||null;
+      const variance=closingBal?Math.abs(closingBal-Math.abs(totalBooked)):null;
+      return{...en,entTxns,booked,pending,totalTxn,totalBooked,closingBal,variance,ok:pending.length===0&&entTxns.length>0};
+    });
+  },[txns,bookings,closingBals,allEntities]);
+
+  const unreadAlerts=alerts.filter(a=>!a.read).length;
+
+  return(
+    <div style={{maxWidth:1300,margin:"0 auto",padding:"1rem"}}>
+      {splitTxn&&<SplitModal txn={splitTxn} vendors={vendorItems} customers={customerItems} glAccounts={glItems} entity={splitTxn.entity}
+        onSave={(splits)=>{updateTxn(splitTxn.id,{isSplit:true,splits,status:"approved"});setSplitTxn(null);}}
+        onClose={()=>setSplitTxn(null)}/>}
+
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
+        <div>
+          <h1 style={{fontSize:18,fontWeight:500}}>Bank Reconciliation Platform</h1>
+          <p style={{fontSize:11,color:"#888",marginTop:2}}>Easyship · JP Morgan Chase → Dynamics 365</p>
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+          {spStatus==="ok"&&<Bdg text="SharePoint connected" bg="#eaf3de" color="#3b6d11"/>}
+          {spStatus==="error"&&<Bdg text="Local mode" bg="#faeeda" color="#854f0b"/>}
+          {spStatus==="loading"&&<Bdg text="Connecting..." bg="#f5f5f3" color="#888"/>}
+          {isAdmin&&<Bdg text="Admin" bg="#e6f1fb" color="#185fa5"/>}
+          {unreadAlerts>0&&<Bdg text={`${unreadAlerts} alerts`} bg="#fcebeb" color="#a32d2d"/>}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",borderBottom:"0.5px solid #e0e0e0",marginBottom:"1rem",overflowX:"auto"}}>
+        {[...TABS,"Alert History"].map((t,i)=>(
+          <button key={i} className={`tab-btn${tab===i?" active":""}`} onClick={()=>setTab(i)}>
+            {t}{t==="Alert History"&&unreadAlerts>0?` (${unreadAlerts})`:""}
+          </button>
+        ))}
+      </div>
+
+      {/* ── TAB 0: UPLOAD & REVIEW ── */}
+      {tab===0&&(
+        <div>
+          {/* Upload area */}
+          <div style={{marginBottom:"1rem"}}>
+            <label style={{fontSize:11,color:"#888",display:"block",marginBottom:4}}>Upload JP Morgan consolidated CSV (all entities auto-detected)</label>
+            <div onDrop={e=>{e.preventDefault();setDragOver(false);handleFile(e.dataTransfer.files[0]);}}
+              onDragOver={e=>{e.preventDefault();setDragOver(true);}} onDragLeave={()=>setDragOver(false)}
+              style={{border:`1.5px dashed ${dragOver?"#185fa5":"#ccc"}`,borderRadius:8,padding:"16px",textAlign:"center",
+                background:dragOver?"#e6f1fb":"#fafaf8",cursor:"pointer"}}>
+              <input type="file" accept=".csv" id="csv-up" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])}/>
+              <label htmlFor="csv-up" style={{cursor:"pointer",fontSize:13,color:"#888"}}>
+                Drop JP Morgan CSV here or <span style={{color:"#185fa5",fontWeight:500}}>click to browse</span>
+              </label>
+            </div>
+          </div>
+
+          {unmatchedAccts.length>0&&(
+            <div className="warn">
+              <strong>Unmatched bank accounts — not linked to any entity:</strong>
+              {unmatchedAccts.map((u,i)=><div key={i} style={{marginTop:2}}>Account: {u.acct} · Sample: {u.desc}</div>)}
+            </div>
+          )}
+
+          {txns.length>0&&(
+            <>
+              {/* Traffic light legend */}
+              <div style={{display:"flex",gap:16,marginBottom:"0.75rem",flexWrap:"wrap"}}>
+                {[["green","#3b6d11","Rule matched — ready to post"],["amber","#e6a817","Seen before — confirm"],["red","#a32d2d","New — needs mapping"]].map(([c,col,label])=>(
+                  <span key={c} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#888"}}>
+                    <span style={{width:10,height:10,borderRadius:"50%",background:col,display:"inline-block"}}></span>{label} ({summary[c]})
+                  </span>
+                ))}
+              </div>
+
+              {/* Summary cards */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(80px,1fr))",gap:6,marginBottom:"0.75rem"}}>
+                {[["Total",summary.total,"#1a1a1a"],["Pending",summary.pending,"#854f0b"],["Approved",summary.approved,"#3b6d11"],["Flagged",summary.flagged,"#e6a817"],["Booked",summary.booked,"#185fa5"],["Rejected",summary.rejected,"#a32d2d"],["No Acct",summary.unmatched,"#a32d2d"]].map(([l,v,c])=>(
+                  <div key={l} className="metric"><div style={{fontSize:10,color:"#888",marginBottom:1}}>{l}</div><div style={{fontSize:18,fontWeight:500,color:c}}>{v}</div></div>
+                ))}
+              </div>
+
+              {/* Progress bar */}
+              <div style={{height:6,background:"#f0f0ee",borderRadius:3,marginBottom:"0.75rem",overflow:"hidden"}}>
+                <div style={{height:6,width:`${summary.total>0?Math.round((summary.booked+summary.approved)/summary.total*100):0}%`,background:"#3b6d11",borderRadius:3,transition:"width .3s"}}></div>
+              </div>
+              <p style={{fontSize:11,color:"#888",marginBottom:"0.75rem"}}>
+                {summary.booked+summary.approved} of {summary.total} done · {summary.pending+summary.flagged} need attention
+              </p>
+
+              {/* Filters */}
+              <div style={{display:"flex",gap:6,marginBottom:"0.75rem",flexWrap:"wrap",alignItems:"center"}}>
+                <select value={filterEntity} onChange={e=>setFilterEntity(e.target.value)} style={{width:200}}>
+                  <option value="all">All entities</option>
+                  {uniqueEntities.map(en=><option key={en}>{en}</option>)}
+                </select>
+                <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{width:110}}>
+                  <option value="all">All statuses</option>
+                  <option value="pending">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="flagged">Flagged</option>
+                  <option value="booked">Booked</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+                <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{width:140}}>
+                  <option value="all">All types</option>
+                  <option value="Payment Journal">Payment Journal</option>
+                  <option value="Cash Receipt">Cash Receipt</option>
+                </select>
+                <select value={filterCcy} onChange={e=>setFilterCcy(e.target.value)} style={{width:80}}>
+                  <option value="all">All CCY</option>
+                  {ccys.map(c=><option key={c}>{c}</option>)}
+                </select>
+                <select value={filterColor} onChange={e=>setFilterColor(e.target.value)} style={{width:120}}>
+                  <option value="all">All rows</option>
+                  <option value="green">Green (matched)</option>
+                  <option value="amber">Amber (seen)</option>
+                  <option value="red">Red (new)</option>
+                </select>
+                <button onClick={()=>{const ids=filtered.filter(t=>t.status==="approved"&&t.rowColor==="green").map(t=>t.id);ids.forEach(id=>{const t=txns.find(x=>x.id===id);if(t)okTxn(t);});}}
+                  style={{background:"#eaf3de",color:"#3b6d11",border:"0.5px solid #c0dd97"}}>
+                  Bulk OK (green rows)
+                </button>
+                <div style={{position:"relative",marginLeft:"auto"}}>
+                  <button onClick={()=>setExportMenu(p=>!p)} style={{background:"#e6f1fb",color:"#185fa5",border:"0.5px solid #b5d4f4",padding:"5px 12px"}}>
+                    Export ▾
+                  </button>
+                  {exportMenu&&(
+                    <div style={{position:"absolute",right:0,top:"110%",background:"#fff",border:"0.5px solid #e0e0e0",borderRadius:6,zIndex:50,minWidth:200,boxShadow:"0 4px 12px rgba(0,0,0,0.1)"}}>
+                      {[
+                        ["Payment Journal only",()=>doExport("payment",`D365_Payment_${new Date().toISOString().slice(0,10)}.csv`)],
+                        ["Cash Receipt only",()=>doExport("receipt",`D365_CashReceipt_${new Date().toISOString().slice(0,10)}.csv`)],
+                        ["Combined (approved)",()=>doExport("all",`D365_Combined_${new Date().toISOString().slice(0,10)}.csv`)],
+                        ["Flagged entries",()=>doExport("flagged",`Flagged_${new Date().toISOString().slice(0,10)}.csv`)],
+                        ["Rejected entries",()=>doExport("rejected",`Rejected_${new Date().toISOString().slice(0,10)}.csv`)],
+                        ["Unmatched entries",()=>doExport("unmatched",`Unmatched_${new Date().toISOString().slice(0,10)}.csv`)],
+                        ...uniqueEntities.map(en=>[`Entity: ${en.slice(0,25)}`,()=>doExport(`entity:${en}`,`D365_${en.replace(/\s/g,"_").slice(0,20)}_${new Date().toISOString().slice(0,10)}.csv`)]),
+                        ["Diagnostic report",()=>exportDiagnostic(txns,skippedRows,unmatchedAccts,alerts)],
+                      ].map(([label,fn],i)=>(
+                        <div key={i} onClick={()=>{fn();setExportMenu(false);}}
+                          style={{padding:"7px 14px",cursor:"pointer",fontSize:12,borderBottom:"0.5px solid #f0f0ee"}}
+                          onMouseEnter={e=>e.target.style.background="#f5f5f3"}
+                          onMouseLeave={e=>e.target.style.background=""}>
+                          {label}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="tbl-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      {["","Date","Entity","Description","Type","CCY","Amount","Doc Type","Acct Type","Account No.","Bal. Acct Type","Bal. Acct No.","Ext. Doc No.","Confidence","Status","Actions"].map(h=>(
+                        <th key={h}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map(t=>{
+                      const rowCls=t.status==="booked"||t.status==="approved"?"green":t.isDuplicate?"amber":t.rowColor||"";
+                      const leftCls=t.status==="booked"||t.status==="approved"?"row-ok":t.rowColor==="amber"?"row-amber":t.rowColor==="red"?"row-red":"";
+                      return(
+                        <tr key={t.id} className={`${rowCls} ${leftCls}`}>
+                          <td>
+                            {t.isDuplicate&&<Bdg text="DUP" bg="#faeeda" color="#854f0b"/>}
+                            {t.isSplit&&<Bdg text="SPLIT" bg="#e6f1fb" color="#185fa5"/>}
+                          </td>
+                          <td style={{whiteSpace:"nowrap"}}>{t.date}</td>
+                          <td style={{maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:10}} title={t.entity}>{t.entity}</td>
+                          <td style={{maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={t.description}>
+                            {editId===t.id
+                              ? <input value={t.description} onChange={e=>updateTxn(t.id,{description:e.target.value})} style={{width:160}}/>
+                              : t.description
+                            }
+                          </td>
+                          <td>{t.type==="Payment Journal"
+                            ?<Bdg text="Payment" bg="#fcebeb" color="#a32d2d"/>
+                            :<Bdg text="Receipt" bg="#eaf3de" color="#3b6d11"/>}
+                          </td>
+                          <td style={{fontSize:10,color:"#888"}}>{t.currency}</td>
+                          <td style={{fontWeight:500,whiteSpace:"nowrap",color:t.type==="Cash Receipt"?"#3b6d11":"#a32d2d"}}>
+                            {t.type==="Cash Receipt"?"+":"-"}{fmt(t.amount)}
+                          </td>
+                          {editId===t.id?(
+                            <>
+                              <td><select value={t.documentType} onChange={e=>updateTxn(t.id,{documentType:e.target.value})} style={{width:110}}>
+                                {DOC_TYPES.map(d=><option key={d}>{d}</option>)}</select></td>
+                              <td><select value={t.accountType} onChange={e=>updateTxn(t.id,{accountType:e.target.value,accountNo:""})} style={{width:110}}>
+                                {ACCOUNT_TYPES.map(a=><option key={a}>{a}</option>)}</select></td>
+                              <td style={{position:"relative",minWidth:200}}>
+                                <SearchDrop
+                                  items={getAccountItems(t)}
+                                  value={t.accountNo}
+                                  onChange={v=>updateTxn(t.id,{accountNo:v})}
+                                  placeholder="Search or type..."
+                                  onAdd={(q)=>{
+                                    const parts=q.split(" ");
+                                    const no=parts[0];const name=parts.slice(1).join(" ")||q;
+                                    const item={id:`m-${Date.now()}`,entity:t.entity,no,name};
+                                    if(t.accountType==="Vendor"){const u=[...vendors,item];setVendors(u);saveLocal("brp_vendors",u);}
+                                    else if(t.accountType==="Customer"){const u=[...customers,item];setCustomers(u);saveLocal("brp_customers",u);}
+                                    else if(t.accountType==="G/L Account"){const u=[...glAccounts,item];setGlAccounts(u);saveLocal("brp_gl",u);}
+                                    updateTxn(t.id,{accountNo:no});
+                                  }}
+                                  addLabel={t.accountType}
+                                />
+                              </td>
+                              <td><select value={t.balAccountType} onChange={e=>updateTxn(t.id,{balAccountType:e.target.value})} style={{width:110}}>
+                                {BAL_ACCOUNT_TYPES.map(a=><option key={a}>{a}</option>)}</select></td>
+                              <td><input value={t.balAccountNo} onChange={e=>updateTxn(t.id,{balAccountNo:e.target.value})} style={{width:120}}/></td>
+                              <td><input value={t.reference||""} onChange={e=>updateTxn(t.id,{reference:e.target.value})} style={{width:90}} placeholder="Bank ref"/></td>
+                            </>
+                          ):(
+                            <>
+                              <td>{t.documentType||"—"}</td>
+                              <td>{t.accountType||<span style={{color:"#ccc"}}>—</span>}</td>
+                              <td style={{color:t.accountNo?"#1a1a1a":"#a32d2d",fontWeight:t.accountNo?400:500}}>{t.accountNo||"missing"}</td>
+                              <td>{t.balAccountType||"—"}</td>
+                              <td style={{fontSize:10}}>{t.balAccountNo||"—"}</td>
+                              <td style={{fontSize:10,color:"#888"}}>{t.reference||"—"}</td>
+                            </>
+                          )}
+                          <td>
+                            {t.matchedRule
+                              ?<span style={{fontSize:10,color:"#3b6d11",display:"flex",alignItems:"center",gap:3}}>
+                                <span style={{width:6,height:6,borderRadius:"50%",background:"#3b6d11",display:"inline-block"}}></span>{t.confidence}%
+                              </span>
+                              :t.memSuggestion
+                                ?<span style={{fontSize:10,color:"#e6a817"}}>memory</span>
+                                :<span style={{color:"#ccc",fontSize:10}}>new</span>
+                            }
+                          </td>
+                          <td>
+                            {t.status==="booked"
+                              ?<Bdg text="Booked" bg="#e6f1fb" color="#185fa5"/>
+                              :t.status==="rejected"
+                                ?<Bdg text="Rejected" bg="#fcebeb" color="#a32d2d"/>
+                                :t.status==="approved"
+                                  ?<Bdg text="Approved" bg="#eaf3de" color="#3b6d11"/>
+                                  :t.status==="flagged"
+                                    ?<Bdg text="Flagged" bg="#faeeda" color="#854f0b"/>
+                                    :<Bdg text="Pending" bg="#f5f5f3" color="#888"/>
+                            }
+                          </td>
+                          <td>
+                            <div style={{display:"flex",gap:3,flexWrap:"wrap",minWidth:180}}>
+                              {/* Green row — show big OK button */}
+                              {(t.rowColor==="green"||t.status==="approved")&&t.status!=="booked"&&t.status!=="rejected"&&(
+                                <button onClick={()=>okTxn(t)} style={{background:"#3b6d11",color:"#fff",border:"none",fontWeight:500,padding:"4px 12px",fontSize:11}}>
+                                  ✓ OK — Post
+                                </button>
+                              )}
+                              {/* Amber row — confirm suggestion */}
+                              {t.rowColor==="amber"&&t.status==="pending"&&t.memSuggestion&&(
+                                <button onClick={()=>{updateTxn(t.id,{accountType:t.memSuggestion.accountType,accountNo:t.memSuggestion.accountNo,balAccountType:t.memSuggestion.balAccountType,balAccountNo:t.memSuggestion.balAccountNo,rowColor:"green",status:"approved"});}}
+                                  style={{background:"#faeeda",color:"#854f0b",border:"0.5px solid #fac775",fontSize:11}}>
+                                  Confirm suggestion
+                                </button>
+                              )}
+                              {editId===t.id?(
+                                <>
+                                  <button onClick={()=>saveAndLearn(t)} style={{background:"#eaf3de",color:"#3b6d11",border:"0.5px solid #c0dd97"}}>Save & Learn</button>
+                                  <button onClick={()=>setEditId(null)}>Cancel</button>
+                                </>
+                              ):(
+                                <>
+                                  {t.status!=="booked"&&<button onClick={()=>setEditId(t.id)} style={{color:"#185fa5",border:"0.5px solid #b5d4f4"}}>Edit</button>}
+                                  {t.status!=="booked"&&t.status!=="rejected"&&<button onClick={()=>setSplitTxn(t)} style={{color:"#888",border:"0.5px solid #e0e0e0"}}>Split</button>}
+                                  {t.status!=="flagged"&&t.status!=="booked"&&t.status!=="rejected"&&<button onClick={()=>updateTxn(t.id,{status:"flagged"})} style={{color:"#854f0b",border:"0.5px solid #fac775"}}>Flag</button>}
+                                  {t.status!=="rejected"&&t.status!=="booked"&&<button onClick={()=>updateTxn(t.id,{status:"rejected",rowColor:"grey"})} style={{color:"#a32d2d",border:"0.5px solid #f7c1c1"}}>Reject</button>}
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p style={{fontSize:10,color:"#aaa",marginTop:6}}>
+                Green rows = rule matched, click OK to post · Amber = seen before, click Confirm · Red = new, click Edit to map
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB 1: RULES ENGINE ── */}
+      {tab===1&&(
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.75rem",flexWrap:"wrap",gap:8}}>
+            <div>
+              <h2 style={{fontSize:15,fontWeight:500}}>Mapping rules</h2>
+              <p style={{fontSize:11,color:"#888",marginTop:2}}>Shared with entire team via SharePoint. Auto-apply on every upload.</p>
+            </div>
+            {spStatus==="ok"&&<Bdg text={`${rules.length} rules in SharePoint`} bg="#eaf3de" color="#3b6d11"/>}
+          </div>
+          {/* Export / Import Rules */}
+          <div className="card" style={{marginBottom:"1rem",background:"#f8fff8",borderColor:"#c0dd97"}}>
+            <div style={{fontSize:12,fontWeight:500,marginBottom:"0.75rem"}}>Backup & Restore Rules</div>
+            <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+              <button onClick={()=>{
+                const csv=["Rule Name,Keyword,Journal Type,Account Type,Account No,Bal Account Type,Bal Account No,Entity,Min Amount,Max Amount",
+                  ...rules.map(r=>`"${r.name}","${r.descContains}","${r.type}","${r.accountType}","${r.accountNo}","${r.balAccountType}","${r.balAccountNo}","${r.entity}","${r.amountMin}","${r.amountMax}"`)
+                ].join("\n");
+                const blob=new Blob([csv],{type:"text/csv"});
+                const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+                a.download=`BankReconRules_Backup_${new Date().toISOString().slice(0,10)}.csv`;a.click();
+              }} style={{background:"#eaf3de",color:"#3b6d11",border:"0.5px solid #c0dd97",padding:"7px 16px",fontSize:12}}>
+                ⬇ Export Rules CSV
+              </button>
+              <div>
+                <label style={{fontSize:11,color:"#888",display:"block",marginBottom:3}}>Import Rules from backup CSV</label>
+                <input type="file" accept=".csv" style={{width:"auto"}} onChange={async(e)=>{
+                  const file=e.target.files[0]; if(!file)return;
+                  const text=await file.text();
+                  const results=Papa.parse(text,{header:true,skipEmptyLines:true});
+                  const imported=results.data.map((r,i)=>({
+                    id:`rule-import-${Date.now()}-${i}`,
+                    name:r["Rule Name"]||"",descContains:r["Keyword"]||"",
+                    type:r["Journal Type"]||"",accountType:r["Account Type"]||"Vendor",
+                    accountNo:r["Account No"]||"",balAccountType:r["Bal Account Type"]||"Bank Account",
+                    balAccountNo:r["Bal Account No"]||"",entity:r["Entity"]||"",
+                    amountMin:r["Min Amount"]||"",amountMax:r["Max Amount"]||""
+                  })).filter(r=>r.name&&r.descContains);
+                  const merged=[...rules,...imported.filter(ir=>!rules.some(r=>r.name===ir.name))];
+                  setRules(merged);saveLocal("brp_rules",merged);
+                  setRuleMsg(`✅ Imported ${imported.length} rules successfully!`);
+                  setTimeout(()=>setRuleMsg(""),4000);
+                }}/>
+              </div>
+            </div>
+            <p style={{fontSize:10,color:"#aaa",marginTop:6}}>Export your rules before any hosting migration so you never lose them. Import them back after migration.</p>
+          </div>
+
+          <div className="card" style={{marginBottom:"1rem"}}>
+            <div style={{fontSize:12,fontWeight:500,marginBottom:"0.75rem"}}>Add new rule — <span style={{color:"#888",fontWeight:400,fontSize:11}}>anyone can add · only admin can delete</span></div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
+              {[["Rule name *","name","e.g. AWS Payment"],["Keyword *","descContains","e.g. AMAZON WEB"],["Account No.","accountNo","e.g. V-001"],["Bal. Acct No.","balAccountNo","e.g. JP MORGAN USD"]].map(([l,k,ph])=>(
+                <div key={k}>
+                  <label style={{fontSize:10,color:"#888",display:"block",marginBottom:2}}>{l}</label>
+                  <input value={newRule[k]} onChange={e=>setNewRule(p=>({...p,[k]:e.target.value}))} placeholder={ph}/>
+                </div>
+              ))}
+              {[["Journal type","type",["","Payment Journal","Cash Receipt"]],["Account type","accountType",ACCOUNT_TYPES],["Bal. acct type","balAccountType",BAL_ACCOUNT_TYPES]].map(([l,k,opts])=>(
+                <div key={k}>
+                  <label style={{fontSize:10,color:"#888",display:"block",marginBottom:2}}>{l}</label>
+                  <select value={newRule[k]} onChange={e=>setNewRule(p=>({...p,[k]:e.target.value}))}>
+                    {opts.map(o=><option key={o} value={o}>{o||"Any"}</option>)}
+                  </select>
+                </div>
+              ))}
+              <div>
+                <label style={{fontSize:10,color:"#888",display:"block",marginBottom:2}}>Entity</label>
+                <select value={newRule.entity} onChange={e=>setNewRule(p=>({...p,entity:e.target.value}))}>
+                  <option value="">All entities</option>
+                  {allEntities.map((en,i)=><option key={i} value={en.name}>{en.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{marginTop:"0.75rem",display:"flex",gap:8,alignItems:"center"}}>
+              <button onClick={async()=>{
+                if(!newRule.name||!newRule.descContains){setRuleMsg("Fill in Rule Name and Keyword.");return;}
+                const r={...newRule,id:`rule-${Date.now()}`};
+                const id=await saveRuleLocal(r);
+                const updated=[...rules,{...r,id}];
+                setRules(updated);
+                setNewRule({name:"",descContains:"",type:"",accountType:"Vendor",accountNo:"",balAccountType:"Bank Account",balAccountNo:"",entity:"",amountMin:"",amountMax:""});
+                setRuleMsg("Rule saved!");setTimeout(()=>setRuleMsg(""),3000);
+              }} style={{background:"#e6f1fb",color:"#185fa5",border:"0.5px solid #b5d4f4",padding:"6px 18px"}}>
+                Save rule
+              </button>
+              {ruleMsg&&<span style={{fontSize:11,color:"#3b6d11"}}>{ruleMsg}</span>}
+            </div>
+          </div>
+          {rules.length===0
+            ?<p style={{fontSize:12,color:"#aaa"}}>No rules yet.</p>
+            :<div className="tbl-wrap">
+              <table>
+                <thead><tr>{["Name","Keyword","Type","Acct Type","Acct No.","Bal. Type","Bal. No.","Entity",isAdmin?"Delete":""].map(h=><th key={h}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {rules.map(r=>(
+                    <tr key={r.id}>
+                      <td style={{fontWeight:500}}>{r.name}</td>
+                      <td style={{fontFamily:"monospace"}}>{r.descContains}</td>
+                      <td>{r.type||"Any"}</td>
+                      <td>{r.accountType}</td>
+                      <td style={{fontFamily:"monospace"}}>{r.accountNo}</td>
+                      <td>{r.balAccountType}</td>
+                      <td style={{fontFamily:"monospace"}}>{r.balAccountNo}</td>
+                      <td>{r.entity||"All"}</td>
+                      {isAdmin&&<td><button onClick={async()=>{
+                        if(!window.confirm("Delete rule?"))return;
+                        if(spStatus==="ok")try{await spDel(RULES_LIST,r.id);}catch(e){}
+                        const u=rules.filter(x=>x.id!==r.id);setRules(u);saveLocal("brp_rules",u);
+                      }} style={{background:"#fcebeb",color:"#a32d2d",border:"0.5px solid #f7c1c1"}}>Delete</button></td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+        </div>
+      )}
+
+      {/* ── TAB 2: MASTER DATA ── */}
+      {tab===2&&(
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
+            <h2 style={{fontSize:15,fontWeight:500}}>Master data — vendors, customers &amp; GL accounts</h2>
+            {isAdmin&&<button onClick={()=>setShowNewEntity(p=>!p)} style={{background:"#e6f1fb",color:"#185fa5",border:"0.5px solid #b5d4f4"}}>+ Add new entity</button>}
+          </div>
+
+          {showNewEntity&&isAdmin&&(
+            <div className="card" style={{marginBottom:"1rem"}}>
+              <div style={{fontSize:12,fontWeight:500,marginBottom:"0.75rem"}}>Add new entity / bank account</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8,marginBottom:8}}>
+                {[["Entity name","name"],["Bank account no.","account"],["Currency","currency"],["JP Morgan name","bankName"]].map(([l,k])=>(
+                  <div key={k}>
+                    <label style={{fontSize:10,color:"#888",display:"block",marginBottom:2}}>{l}</label>
+                    <input value={newEntityForm[k]} onChange={e=>setNewEntityForm(p=>({...p,[k]:e.target.value}))}/>
+                  </div>
+                ))}
+              </div>
+              <button onClick={addEntity} style={{background:"#eaf3de",color:"#3b6d11",border:"0.5px solid #c0dd97"}}>Save entity</button>
+            </div>
+          )}
+
+          {/* Master data sub-tabs */}
+          <div style={{display:"flex",gap:0,borderBottom:"0.5px solid #e0e0e0",marginBottom:"1rem"}}>
+            {[["vendors","Vendors"],["customers","Customers"],["gl","GL Accounts"]].map(([k,l])=>(
+              <button key={k} className={`tab-btn${masterTab===k?" active":""}`} onClick={()=>setMasterTab(k)}>{l}</button>
+            ))}
+          </div>
+
+          {/* CSV Import */}
+          <div className="card" style={{marginBottom:"1rem",background:"#f8fff8",borderColor:"#c0dd97"}}>
+            <div style={{fontSize:12,fontWeight:500,marginBottom:"0.75rem"}}>Import master data from CSV — <span style={{fontWeight:400,color:"#888"}}>use this to bulk load vendors &amp; GL accounts</span></div>
+            <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+              <div>
+                <label style={{fontSize:11,color:"#888",display:"block",marginBottom:3}}>Import Vendors CSV</label>
+                <input type="file" accept=".csv" style={{width:"auto"}} onChange={e=>importMasterCSV(e.target.files[0],"vendors")}/>
+              </div>
+              <div>
+                <label style={{fontSize:11,color:"#888",display:"block",marginBottom:3}}>Import GL Accounts CSV</label>
+                <input type="file" accept=".csv" style={{width:"auto"}} onChange={e=>importMasterCSV(e.target.files[0],"gl")}/>
+              </div>
+              <div>
+                <label style={{fontSize:11,color:"#888",display:"block",marginBottom:3}}>Import Customers CSV</label>
+                <input type="file" accept=".csv" style={{width:"auto"}} onChange={e=>importMasterCSV(e.target.files[0],"customers")}/>
+              </div>
+            </div>
+            {masterMsg&&<p style={{fontSize:12,color:"#3b6d11",marginTop:"0.5rem",fontWeight:500}}>{masterMsg}</p>}
+            <p style={{fontSize:10,color:"#aaa",marginTop:6}}>Columns needed — Vendors: Entity, Vendor No, Vendor Name · GL: Entity Name, GL No., GL Account · Customers: Entity Name, Customer No., Customer Name</p>
+          </div>
+            <div style={{fontSize:12,fontWeight:500,marginBottom:"0.75rem"}}>Add new {masterTab==="vendors"?"vendor":masterTab==="customers"?"customer":"GL account"} — <span style={{color:"#888",fontWeight:400,fontSize:11}}>anyone can add · admin can edit/delete</span></div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 2fr auto",gap:8,alignItems:"flex-end"}}>
+              <div>
+                <label style={{fontSize:10,color:"#888",display:"block",marginBottom:2}}>Entity</label>
+                <select value={newMaster.entity} onChange={e=>setNewMaster(p=>({...p,entity:e.target.value}))}>
+                  <option value="">Select entity</option>
+                  {allEntities.map((en,i)=><option key={i} value={en.name}>{en.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:"#888",display:"block",marginBottom:2}}>No.</label>
+                <input value={newMaster.no} onChange={e=>setNewMaster(p=>({...p,no:e.target.value}))} placeholder="e.g. V-001"/>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:"#888",display:"block",marginBottom:2}}>Name</label>
+                <input value={newMaster.name} onChange={e=>setNewMaster(p=>({...p,name:e.target.value}))} placeholder="e.g. Amazon Web Services"/>
+              </div>
+              <button onClick={addMasterItem} style={{background:"#eaf3de",color:"#3b6d11",border:"0.5px solid #c0dd97",height:30}}>Add</button>
+            </div>
+            {masterMsg&&<p style={{fontSize:11,color:"#3b6d11",marginTop:6}}>{masterMsg}</p>}
+          </div>
+
+          {/* Filter by entity */}
+          <div style={{marginBottom:"0.75rem",display:"flex",gap:8,alignItems:"center"}}>
+            <select value={filterEntity} onChange={e=>setFilterEntity(e.target.value)} style={{width:220}}>
+              <option value="all">All entities</option>
+              {allEntities.map((en,i)=><option key={i} value={en.name}>{en.name}</option>)}
+            </select>
+            <span style={{fontSize:11,color:"#888"}}>
+              {masterTab==="vendors"?`${entityVendors.length} vendors`:masterTab==="customers"?`${entityCustomers.length} customers`:`${entityGL.length} GL accounts`} shown
+            </span>
+          </div>
+
+          {/* Data table */}
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr>{["Entity","No.","Name",isAdmin?"Actions":""].map(h=><th key={h}>{h}</th>)}</tr></thead>
+              <tbody>
+                {(masterTab==="vendors"?entityVendors:masterTab==="customers"?entityCustomers:entityGL).slice(0,200).map((item,i)=>(
+                  <tr key={item.id||i}>
+                    <td style={{fontSize:10,color:"#888"}}>{item.entity}</td>
+                    <td style={{fontFamily:"monospace"}}>{item.no}</td>
+                    <td>{item.name}</td>
+                    {isAdmin&&<td>
+                      <button onClick={()=>delMasterItem(masterTab,item.id)} style={{background:"#fcebeb",color:"#a32d2d",border:"0.5px solid #f7c1c1"}}>Delete</button>
+                    </td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {(masterTab==="customers"&&entityCustomers.length>200)&&<p style={{fontSize:11,color:"#aaa",marginTop:6}}>Showing first 200 of {entityCustomers.length}. Use entity filter to narrow down.</p>}
+        </div>
+      )}
+
+      {/* ── TAB 3: RECONCILIATION ── */}
+      {tab===3&&(
+        <div>
+          <h2 style={{fontSize:15,fontWeight:500,marginBottom:"1rem"}}>Daily reconciliation — all entities</h2>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:8}}>
+            {reconData.filter(en=>en.entTxns.length>0||true).map((en,i)=>(
+              <div key={i} className="card" style={{cursor:"pointer",borderColor:en.ok&&en.entTxns.length>0?"#9fe1cb":en.entTxns.length===0?"#e0e0e0":"#e0e0e0"}}
+                onClick={()=>setDashEntity(dashEntity===en.name?null:en.name)}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
+                  <span style={{fontSize:11,fontWeight:500,lineHeight:1.3,flex:1}}>{en.name}</span>
+                  <span style={{width:8,height:8,borderRadius:"50%",background:en.entTxns.length===0?"#d3d1c7":en.ok?"#3b6d11":"#854f0b",display:"inline-block",flexShrink:0,marginTop:2}}></span>
+                </div>
+                <div style={{fontSize:10,color:"#aaa",marginBottom:6}}>{en.account} · {en.currency} · {en.bankName}</div>
+                {en.entTxns.length===0
+                  ?<div style={{fontSize:11,color:"#aaa"}}>No data</div>
+                  :<>
+                    <div style={{height:4,background:"#f0f0ee",borderRadius:2,marginBottom:4}}>
+                      <div style={{height:4,width:`${en.entTxns.length>0?Math.round(en.booked.length/en.entTxns.length*100):0}%`,background:"#3b6d11",borderRadius:2}}></div>
+                    </div>
+                    <div style={{fontSize:10,color:"#888",marginBottom:4}}>{en.booked.length}/{en.entTxns.length} booked · {en.pending.length} pending</div>
+                    {en.closingBal&&(
+                      <div style={{fontSize:10}}>
+                        <span style={{color:"#888"}}>JP Morgan closing: </span><strong>{fmtFull(en.closingBal)}</strong>
+                        {en.variance!==null&&<span style={{color:en.variance<0.01?"#3b6d11":"#a32d2d",marginLeft:6}}>
+                          {en.variance<0.01?"✓ Matched":`⚠ Var: ${fmtFull(en.variance)}`}
+                        </span>}
+                      </div>
+                    )}
+                  </>
+                }
+                {dashEntity===en.name&&<div style={{marginTop:6,fontSize:10,color:"#185fa5"}}>▼ Click to collapse</div>}
+              </div>
+            ))}
+          </div>
+
+          {/* Entity drill-down */}
+          {dashEntity&&(()=>{
+            const en=reconData.find(e=>e.name===dashEntity);
+            if(!en)return null;
+            return(
+              <div style={{marginTop:"1rem"}}>
+                <h3 style={{fontSize:14,fontWeight:500,marginBottom:"0.75rem"}}>{en.name} — detailed transactions</h3>
+                <div className="tbl-wrap">
+                  <table>
+                    <thead><tr>{["Date","Description","Type","Amount","Account No.","Status","Booked at"].map(h=><th key={h}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {en.entTxns.map((t,i)=>(
+                        <tr key={i}>
+                          <td style={{whiteSpace:"nowrap"}}>{t.date}</td>
+                          <td style={{maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.description}</td>
+                          <td>{t.type==="Payment Journal"?<Bdg text="Payment" bg="#fcebeb" color="#a32d2d"/>:<Bdg text="Receipt" bg="#eaf3de" color="#3b6d11"/>}</td>
+                          <td style={{fontWeight:500,color:t.type==="Cash Receipt"?"#3b6d11":"#a32d2d"}}>{t.type==="Cash Receipt"?"+":"-"}{fmt(t.amount)}</td>
+                          <td style={{fontFamily:"monospace",fontSize:10,color:t.accountNo?"#1a1a1a":"#a32d2d"}}>{t.accountNo||"missing"}</td>
+                          <td>{t.status==="booked"?<Bdg text="Booked" bg="#e6f1fb" color="#185fa5"/>:t.status==="approved"?<Bdg text="Approved" bg="#eaf3de" color="#3b6d11"/>:t.status==="rejected"?<Bdg text="Rejected" bg="#fcebeb" color="#a32d2d"/>:<Bdg text="Pending" bg="#f5f5f3" color="#888"/>}</td>
+                          <td style={{fontSize:10,color:"#aaa"}}>{t.bookedAt||"—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* ── TAB 4: TEAM DASHBOARD ── */}
+      {tab===4&&(
+        <div>
+          <h2 style={{fontSize:15,fontWeight:500,marginBottom:"1rem"}}>Team dashboard</h2>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:8,marginBottom:"1.5rem"}}>
+            {reconData.map((en,i)=>(
+              <div key={i} className="card" style={{cursor:"pointer",borderColor:en.ok&&en.entTxns.length>0?"#9fe1cb":"#e0e0e0"}}
+                onClick={()=>{setTab(3);setDashEntity(en.name);}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontSize:11,fontWeight:500,lineHeight:1.3,flex:1}}>{en.name}</span>
+                  <span style={{width:8,height:8,borderRadius:"50%",background:en.entTxns.length===0?"#d3d1c7":en.ok?"#3b6d11":"#854f0b",display:"inline-block",marginTop:2,flexShrink:0}}></span>
+                </div>
+                <div style={{fontSize:10,color:"#aaa",marginBottom:5}}>{en.currency} · {en.bankName}</div>
+                {en.entTxns.length===0
+                  ?<div style={{fontSize:11,color:"#aaa"}}>No data uploaded</div>
+                  :<>
+                    <div style={{height:3,background:"#f0f0ee",borderRadius:2,marginBottom:4}}>
+                      <div style={{height:3,width:`${Math.round(en.booked.length/en.entTxns.length*100)}%`,background:"#3b6d11",borderRadius:2}}></div>
+                    </div>
+                    <div style={{fontSize:10,color:"#888"}}>{en.booked.length}/{en.entTxns.length} booked · {en.pending.length} pending</div>
+                    {en.variance!==null&&<div style={{fontSize:10,marginTop:3,color:en.variance<0.01?"#3b6d11":"#a32d2d"}}>
+                      {en.variance<0.01?"✓ Reconciled":`⚠ Var: ${fmtFull(en.variance)}`}
+                    </div>}
+                  </>
+                }
+                <div style={{fontSize:10,color:"#185fa5",marginTop:4}}>Click to view details →</div>
+              </div>
+            ))}
+          </div>
+
+          <h3 style={{fontSize:13,fontWeight:500,marginBottom:"0.75rem"}}>Upload sessions</h3>
+          {sessions.length===0
+            ?<p style={{fontSize:12,color:"#aaa"}}>No sessions yet.</p>
+            :<div className="tbl-wrap">
+              <table>
+                <thead><tr>{["Date","File","Transactions","Skipped","Unmatched"].map(h=><th key={h}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {sessions.map(s=>(
+                    <tr key={s.id}>
+                      <td>{s.date}</td>
+                      <td style={{fontFamily:"monospace",fontSize:10}}>{s.file}</td>
+                      <td>{s.count}</td>
+                      <td style={{color:"#854f0b"}}>{s.skipped||0}</td>
+                      <td style={{color:s.unmatched>0?"#a32d2d":"#3b6d11"}}>{s.unmatched||0}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+        </div>
+      )}
+
+      {/* ── TAB 5: ALERT HISTORY ── */}
+      {tab===5&&(
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem"}}>
+            <h2 style={{fontSize:15,fontWeight:500}}>Alert history</h2>
+            <button onClick={()=>setAlerts(p=>p.map(a=>({...a,read:true})))} style={{fontSize:11,color:"#888"}}>Mark all read</button>
+          </div>
+          {alerts.length===0
+            ?<p style={{fontSize:12,color:"#aaa"}}>No alerts yet.</p>
+            :<div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {alerts.map(a=>(
+                <div key={a.id} className={a.type==="warning"?"warn":a.type==="error"?"err":"notice"} style={{marginBottom:0,opacity:a.read?0.6:1}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                    <span>{a.msg}</span>
+                    <span style={{fontSize:10,color:"#aaa",whiteSpace:"nowrap"}}>{a.time}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          }
+          <div style={{marginTop:"1.5rem"}}>
+            <button onClick={()=>exportDiagnostic(txns,skippedRows,unmatchedAccts,alerts)}
+              style={{background:"#e6f1fb",color:"#185fa5",border:"0.5px solid #b5d4f4",padding:"7px 18px"}}>
+              Download diagnostic report
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
