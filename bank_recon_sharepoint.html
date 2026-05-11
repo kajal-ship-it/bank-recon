@@ -1024,22 +1024,27 @@ function renderSearchField(fieldId, val, acctType, entity, selectFn, prefix){
 }
 
 function onSearchInput(fieldId, acctType, entity, selectFn, q){
-  const drop=document.getElementById(`drop-${fieldId}`);
+  var drop=document.getElementById("drop-"+fieldId);
   if(!drop) return;
-  const pool=getPool(acctType,entity);
-  const filtered=q?pool.filter(i=>`${i.no||i.account||""} ${i.name||i.bankName||""}`.toLowerCase().includes(q.toLowerCase())):pool.slice(0,30);
-  if(filtered.length===0&&!q){drop.style.display="none";return;}
+  var pool=getPool(acctType,entity);
   drop.style.display="block";
-  let html=filtered.slice(0,50).map(i=>`
-    <div class="sdrop-item" onmousedown="event.preventDefault();${selectFn}('${fieldId}','${(i.no||i.account||"").replace(/'/g,"\\'")}','${(i.name||i.bankName||"").replace(/'/g,"\\'").replace(/"/g,"\"")}')">
-      <span class="sdrop-no">${i.no||i.account||""}</span>
-      <span class="sdrop-name">${(i.name||i.bankName||"").slice(0,35)}</span>
-    </div>`).join("");
-  if(q) html+=`<div class="sdrop-add" onmousedown="event.preventDefault();submitNewMasterFromSearch('${q}','${acctType}','${entity}','${fieldId}','${selectFn}')">+ Add "${q}" as new ${acctType}</div>`;
-  else if(pool.length===0) html+=`<div class="sdrop-empty">No ${acctType} data loaded yet — import from Master Data</div>`;
+  if(pool.length===0){
+    drop.innerHTML="<div class='sdrop-empty'>No "+acctType+" loaded \u2014 go to Master Data and import CSV first</div>";
+    return;
+  }
+  var filtered=q ? pool.filter(function(i){
+    return ((i.no||i.account||"")+" "+(i.name||i.bankName||"")).toLowerCase().indexOf(q.toLowerCase())>=0;
+  }) : pool.slice(0,50);
+  var html="";
+  filtered.slice(0,80).forEach(function(i){
+    var no=String(i.no||i.account||"");
+    var nm=String(i.name||i.bankName||"").slice(0,40);
+    html+="<div class='sdrop-item' onmousedown=\"event.preventDefault();"+selectFn+"('"+fieldId+"','"+no.replace(/'/g,"&#39;")+"','"+nm.replace(/'/g,"&#39;")+"')\"><span class='sdrop-no'>"+no+"</span><span class='sdrop-name'>"+nm+"</span></div>";
+  });
+  if(filtered.length===0) html="<div class='sdrop-empty'>No results for &quot;"+q+"&quot;</div>";
+  if(q) html+="<div class='sdrop-add' onmousedown=\"event.preventDefault();submitNewMasterFromSearch('"+q.replace(/'/g,"&#39;")+"','"+acctType+"','"+entity+"','"+fieldId+"','"+selectFn+"')\">+ Add &quot;"+q+"&quot; as new "+acctType+"</div>";
   drop.innerHTML=html;
 }
-
 function selectTxnAcct(fieldId, no, name){
   const txnId=fieldId.replace("acct-","");
   const inp=document.getElementById(`inp-${fieldId}`);
