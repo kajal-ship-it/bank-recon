@@ -359,6 +359,8 @@ let S = {
   showNewEntity:false, newEntity:{name:"",account:"",currency:"",bankName:""},
   reconEntity:null, drawerOpen:false,
   forgotMsg:"",
+  dailyBalances:{}, reconFilter:"all",
+  dashDate:"all", monthlyEntFilter:"all", voidMenuOpen:false,
 };
 
 // ═══════════════════════════════════════════════════
@@ -388,6 +390,15 @@ function loadState(){
   S.unmappedCarry    = ll("brp3_carry",[]);
   S.dailyBalances    = ll("brp3_balances",{});
   USERS              = ll("brp3_users", USERS);
+  // Ensure new state properties exist (safety for users loading from old sessions)
+  if(!S.colFilters) S.colFilters={date:"",docType:"",extDoc:"",acctType:"",acctNo:"",amount:"",balType:"",balNo:"",ccy:"",status:""};
+  if(S.voidMenuOpen===undefined) S.voidMenuOpen=false;
+  if(S.colFilterOpen===undefined) S.colFilterOpen=null;
+  if(S.dashDate===undefined) S.dashDate="all";
+  if(S.monthlyEntFilter===undefined) S.monthlyEntFilter="all";
+  if(S.filterIC===undefined) S.filterIC="all";
+  if(S.filterDesc===undefined) S.filterDesc="";
+  if(S.ruleFilter===undefined) S.ruleFilter={entity:"",bank:"",keyword:""};
 }
 
 function saveSession(){
@@ -1097,23 +1108,36 @@ function renderUpload(){
       <button onclick="bulkOK()" class="btn-success btn-sm">✓ Bulk OK green (${s.green})</button>
       ${S.filterDesc?`<button onclick="selectAllFiltered()" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">☑ Select all ${getFiltered().length} filtered</button>`:""}
       <div style="display:flex;gap:6px;align-items:center;margin-left:auto">
-        ${canAdmin()&&S.txns.filter(t=>t.status==="booked").length>0?`
-        <div style="position:relative">
-          <button onclick="S.voidMenuOpen=!S.voidMenuOpen;render()" class="btn-sm btn-danger" style="display:flex;align-items:center;gap:4px">
-            🗑 Void Booked ▾
-          </button>
-          ${S.voidMenuOpen?`<div style="position:absolute;right:0;top:calc(100%+4px);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);z-index:100;min-width:240px;box-shadow:var(--shadow-md)">
-            <div style="padding:4px 14px;font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;background:#f8f9fb;border-bottom:1px solid var(--border)">Void booked entries</div>
-            ${S.filterEntity!=="all"?`<div style="padding:8px 14px;cursor:pointer;font-size:12px;border-bottom:1px solid #f4f5f7;color:var(--red)" onclick="voidBookedByFilter()">🗑 Void booked for current filter (${S.txns.filter(t=>t.status==="booked"&&(S.filterEntity==="all"||(S.filterEntity.includes("|")?t.entity===S.filterEntity.split("|")[0]&&t.entityAcct===S.filterEntity.split("|")[1]:t.entity===S.filterEntity))).length})</div>`:""}
-            <div style="padding:8px 14px;cursor:pointer;font-size:12px;color:var(--red)" onclick="voidAllBooked()">🗑 Void ALL booked entries (${S.txns.filter(t=>t.status==="booked").length})</div>
-          </div>`:""}
-        </div>`:""}
         <div class="export-wrap">
           <button onclick="S.exportOpen=!S.exportOpen;render()" class="btn-primary btn-sm">Export ▾</button>
           ${S.exportOpen?renderExportMenu(ents):""}
         </div>
       </div>
     </div>
+
+    ${(()=>{
+      const bookedAll = S.txns.filter(t=>t.status==="booked");
+      const bookedFiltered = getFiltered().filter(t=>t.status==="booked");
+      if(!canAdmin()||bookedAll.length===0) return "";
+      return `<div style="background:var(--red-lt);border:1px solid var(--red-bd);border-radius:var(--radius);padding:10px 14px;margin-bottom:8px;display:flex;gap:10px;align-items:flex-start">
+        <span style="font-size:16px">🔒</span>
+        <div style="flex:1">
+          <div style="font-weight:600;color:var(--red);font-size:12px;margin-bottom:6px">${bookedAll.length} booked entries — Admin can void if wrong</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button onclick="setFilter('filterStatus','booked')" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">
+              👁 Show only booked (${bookedAll.length})
+            </button>
+            ${bookedFiltered.length>0&&bookedFiltered.length<bookedAll.length?`
+            <button onclick="voidBookedByFilter()" class="btn-sm btn-danger">
+              🗑 Void ${bookedFiltered.length} (current filter)
+            </button>`:""}
+            <button onclick="voidAllBooked()" style="background:var(--red);color:#fff;border:none;border-radius:var(--radius);padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">
+              🗑 Void ALL ${bookedAll.length} booked
+            </button>
+          </div>
+        </div>
+      </div>`;
+    })()}
 
     <div class="tbl-wrap" id="txn-table">
       <table>
@@ -1242,10 +1266,10 @@ ${t.description}"
   } else if(t.status==="voided"){
     actions=`<button onclick="undoVoid('${t.id}')" class="btn-sm" style="background:var(--amber-lt);color:var(--amber);border-color:var(--amber-bd);display:block;width:100%">↩ Restore</button>`;
   } else {
-    actions=`<span style="font-size:10px;color:var(--text3)">🔒 Booked</span>`;
+    actions=`<span style="font-size:10px;font-weight:600;color:var(--blue)">🔒 Booked</span>`;
     if(canAdmin()){
-      actions+=`<button onclick="unlockTxn('${t.id}')" class="btn-xs" style="margin-top:3px;display:block;width:100%;background:var(--amber-lt);color:var(--amber);border-color:var(--amber-bd);border-radius:4px;padding:3px 6px">🔓 Unlock</button>`;
-      actions+=`<button onclick="voidTxn('${t.id}')" class="btn-xs btn-danger" style="margin-top:3px;display:block;width:100%">🗑 Void</button>`;
+      actions+=`<button onclick="voidTxn('${t.id}')" class="btn-sm btn-danger" style="margin-top:4px;display:block;width:100%">🗑 Void</button>`;
+      actions+=`<button onclick="unlockTxn('${t.id}')" class="btn-xs" style="margin-top:3px;display:block;width:100%;background:var(--amber-lt);color:var(--amber);border-color:var(--amber-bd)">🔓 Unlock & re-edit</button>`;
     }
   }
 
