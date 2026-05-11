@@ -1449,7 +1449,7 @@ function renderDashboard(){
           <td style="font-size:11px">${s.uploadedBy||"—"}</td>
           <td style="font-weight:500">${s.count}</td>
           <td style="color:${s.skipped>0?"var(--amber)":"var(--text3)"}">${s.skipped||0}</td>
-          <td style="color:${s.unmatched>0?"var(--red)":"var(--green)";font-weight:${s.unmatched>0?600:400}}">${s.unmatched||0}</td>
+          <td style="color:${s.unmatched>0?"var(--red)":"var(--green)"};font-weight:${s.unmatched>0?600:400}">${s.unmatched||0}</td>
         </tr>`).join("")}</tbody>
       </table>
     </div>`}`;
