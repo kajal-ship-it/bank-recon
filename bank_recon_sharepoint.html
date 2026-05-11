@@ -627,6 +627,12 @@ function isIntercompany(t){
 
 // Get bank accounts for entity
 function getBankAccounts(entityName){
+  // If no entity specified, return ALL bank accounts across all entities
+  if(!entityName){
+    const all = allEntities().map(e=>({no:e.account, name:e.bankName+" ("+e.name+")", entity:e.name}));
+    const stripes = STRIPE_ACCOUNTS.map(s=>({no:s.no, name:s.label+" ("+s.name+")", entity:s.name}));
+    return [...all,...stripes];
+  }
   const entAccts = allEntities().filter(e=>e.name===entityName)
     .map(e=>({no:e.account, name:e.bankName, entity:entityName}));
   const stripe = STRIPE_ACCOUNTS.filter(s=>s.name===entityName)
@@ -2072,8 +2078,26 @@ function openReconDrawer(reconKey){
         <button onclick="drawerClearSel()" id="drawer-clear-btn" style="display:none;background:none;border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer">✕ Clear</button>
         <span style="font-size:10px;color:var(--text3);margin-left:auto">Voided = excluded from balance</span>
       </div>`:""}
+      <!-- FILTER + EXPORT -->
+      <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-shrink:0;flex-wrap:wrap">
+        <select onchange="drawerApplyFilters()" id="drawer-sf" style="height:32px;border:1px solid var(--border);border-radius:6px;padding:0 8px;font-size:12px;min-width:140px">
+          <option value="all">All statuses</option>
+          <option value="booked">🔵 Booked only</option>
+          <option value="approved">🟢 Approved only</option>
+          <option value="pending">⚪ Pending only</option>
+          <option value="voided">Voided only</option>
+          <option value="missing">❌ Missing account</option>
+        </select>
+        <select onchange="drawerApplyFilters()" id="drawer-tf" style="height:32px;border:1px solid var(--border);border-radius:6px;padding:0 8px;font-size:12px;min-width:130px">
+          <option value="all">All types</option>
+          <option value="Receipt">Receipts only</option>
+          <option value="Payment">Payments only</option>
+        </select>
+        <span id="drawer-row-count" style="font-size:11px;color:var(--text3)"></span>
+        <button onclick="exportDrawerData('${eName}','${eAcct}')" class="btn-sm" style="margin-left:auto;background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">⬇ Export CSV</button>
+      </div>
       <!-- TABLE -->
-      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;flex:1">
+      <div id="drawer-table-wrap" style="overflow:auto;border:1px solid var(--border);border-radius:8px;flex:1">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
           <thead><tr style="background:#f8f9fb;position:sticky;top:0;z-index:2">
             ${canAdmin()?`<th style="padding:8px 12px;border-bottom:1px solid var(--border)"><input type="checkbox" onchange="drawerSelectAll(this.checked)"></th>`:""}
@@ -2098,10 +2122,10 @@ function openReconDrawer(reconKey){
               ${canAdmin()?`<td style="padding:6px 12px"><input type="checkbox" class="drawer-chk" data-id="${t.id}" onchange="drawerChkChange()"></td>`:""}
               <td style="padding:6px 12px;font-family:'DM Mono',monospace;font-size:11px;white-space:nowrap">${t.date}</td>
               <td style="padding:6px 12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.description}">${t.cleanDesc||t.description}</td>
-              <td style="padding:6px 12px">${t.type==="Cash Receipt"?`<span class="badge badge-green">Receipt</span>`:`<span class="badge badge-red">Payment</span>`}</td>
+              <td class="drawer-type-cell" style="padding:6px 12px">${t.type==="Cash Receipt"?`<span class="badge badge-green">Receipt</span>`:`<span class="badge badge-red">Payment</span>`}</td>
               <td style="padding:6px 12px;font-weight:600;font-family:'DM Mono',monospace;color:${t.type==="Cash Receipt"?"var(--green)":"var(--red)"}">${t.type==="Cash Receipt"?"+":"-"}${fmtAmt(t.amount)}</td>
-              <td style="padding:6px 12px;font-family:'DM Mono',monospace;font-size:11px;color:${t.accountNo?"var(--blue)":"var(--red)"}">${t.accountNo||"missing"}</td>
-              <td style="padding:6px 12px">${statusMap[t.status]||t.status}</td>
+              <td class="drawer-acct-cell" style="padding:6px 12px;font-family:'DM Mono',monospace;font-size:11px;color:${t.accountNo?"var(--blue)":"var(--red)"}">${t.accountNo||"missing"}</td>
+              <td class="drawer-status-cell" style="padding:6px 12px">${statusMap[t.status]||t.status}</td>
             </tr>`;
           }).join("")}</tbody>
         </table>
@@ -2113,6 +2137,57 @@ function openReconDrawer(reconKey){
 function closeDrawer(){
   document.getElementById("drawer-container").innerHTML="";
   S.reconEntity=null;
+}
+
+function drawerApplyFilters(){
+  var sf=document.getElementById("drawer-sf");
+  var tf=document.getElementById("drawer-tf");
+  var sv=sf?sf.value:"all";
+  var tv=tf?tf.value:"all";
+  var rows=document.querySelectorAll("#drawer-table-wrap tr[data-txnid]");
+  var shown=0;
+  rows.forEach(function(row){
+    var statusCell=row.querySelector(".drawer-status-cell");
+    var typeCell=row.querySelector(".drawer-type-cell");
+    var acctCell=row.querySelector(".drawer-acct-cell");
+    var statusText=statusCell?statusCell.textContent.trim().toLowerCase():"";
+    var typeText=typeCell?typeCell.textContent.trim().toLowerCase():"";
+    var acctText=acctCell?acctCell.textContent.trim().toLowerCase():"";
+    var showRow=true;
+    if(sv==="booked"&&statusText!=="booked") showRow=false;
+    if(sv==="approved"&&statusText!=="approved") showRow=false;
+    if(sv==="pending"&&statusText!=="pending") showRow=false;
+    if(sv==="voided"&&statusText!=="voided") showRow=false;
+    if(sv==="missing"&&acctText!=="missing") showRow=false;
+    if(tv==="Receipt"&&!typeText.includes("receipt")) showRow=false;
+    if(tv==="Payment"&&!typeText.includes("payment")) showRow=false;
+    row.style.display=showRow?"":"none";
+    if(showRow) shown++;
+  });
+  var countEl=document.getElementById("drawer-row-count");
+  if(countEl) countEl.textContent=shown+" entries shown";
+}
+
+function exportDrawerData(entityName, entityAcct){
+  var txns=S.txns.concat(S.bookings).filter(function(t){
+    return t.entity===entityName&&t.entityAcct===entityAcct;
+  });
+  var sf=document.getElementById("drawer-sf");
+  var sv=sf?sf.value:"all";
+  if(sv==="booked") txns=txns.filter(function(t){return t.status==="booked";});
+  else if(sv==="approved") txns=txns.filter(function(t){return t.status==="approved";});
+  else if(sv==="pending") txns=txns.filter(function(t){return t.status==="pending";});
+  else if(sv==="voided") txns=txns.filter(function(t){return t.status==="voided";});
+  else if(sv==="missing") txns=txns.filter(function(t){return !t.accountNo;});
+  var h=["Date","Description","Type","Amount","Account No","Bal Account","Status","Booked By"];
+  var rows=[h.join(",")];
+  txns.forEach(function(t){
+    rows.push([t.date,'"'+(t.cleanDesc||t.description||"").replace(/"/g,'""')+'"',
+      t.type,t.amount,t.accountNo||"missing",t.balAccountNo||"",t.status,t.bookedBy||""].join(","));
+  });
+  var blob=new Blob([rows.join("\n")],{type:"text/csv"});
+  var a=document.createElement("a");a.href=URL.createObjectURL(blob);
+  a.download=entityName.replace(/\s/g,"_").slice(0,20)+"_"+today()+".csv";a.click();
 }
 
 function goToUploadFiltered(entityName, entityAcct){
