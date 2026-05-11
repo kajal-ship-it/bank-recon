@@ -521,9 +521,25 @@ function getBankAccounts(entityName){
 
 // Get search pool for account type
 function getPool(acctType, entityName){
-  if(acctType==="Vendor") return S.vendors.filter(v=>!entityName||v.entity===entityName);
-  if(acctType==="Customer") return S.customers.filter(c=>!entityName||c.entity===entityName);
-  if(acctType==="G/L Account") return S.glAccounts.filter(g=>!entityName||g.entity===entityName);
+  var eName = (entityName||"").trim().toLowerCase();
+  var match = function(item){
+    if(!eName) return true;
+    var ie = (item.entity||"").trim().toLowerCase();
+    return ie===eName || ie==="" || !item.entity;
+  };
+  if(acctType==="Vendor"){
+    var vpool = S.vendors.filter(match);
+    // If no match found for entity, return all vendors so user can still search
+    return vpool.length>0 ? vpool : S.vendors;
+  }
+  if(acctType==="Customer"){
+    var cpool = S.customers.filter(match);
+    return cpool.length>0 ? cpool : S.customers;
+  }
+  if(acctType==="G/L Account"){
+    var gpool = S.glAccounts.filter(match);
+    return gpool.length>0 ? gpool : S.glAccounts;
+  }
   if(acctType==="Bank Account") return getBankAccounts(entityName);
   return [];
 }
@@ -1012,13 +1028,13 @@ function renderRow(t){
 
 // Render inline search field for transactions
 function renderSearchField(fieldId, val, acctType, entity, selectFn, prefix){
-  const pool=getPool(acctType,entity);
-  const hasData=pool.length>0;
+  // Escape entity for HTML attribute (replace quotes)
+  var entitySafe = (entity||"").replace(/'/g,"&#39;").replace(/"/g,"&quot;");
   return`<div class="search-wrap">
-    <input id="inp-${fieldId}" value="${val||""}" placeholder="${hasData?'Search…':'Type No.'}"
-      oninput="onSearchInput('${fieldId}','${acctType}','${entity}','${selectFn}',this.value)"
-      onfocus="onSearchInput('${fieldId}','${acctType}','${entity}','${selectFn}',this.value)"
-      onclick="event.stopPropagation()" style="width:140px">
+    <input id="inp-${fieldId}" value="${val||""}" placeholder="Search No. or Name…"
+      oninput="onSearchInput('${fieldId}','${acctType}','${entitySafe}','${selectFn}',this.value)"
+      onfocus="onSearchInput('${fieldId}','${acctType}','${entitySafe}','${selectFn}',this.value)"
+      onclick="event.stopPropagation()" style="width:150px">
     <div class="search-drop" id="drop-${fieldId}" style="display:none"></div>
   </div>`;
 }
