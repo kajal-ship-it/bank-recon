@@ -967,6 +967,13 @@ function renderTopbar(){
 
 // ─── TAB 0: UPLOAD & REVIEW ──────────────────────────
 function renderUpload(){
+  // Safety: initialise all new state props in case old localStorage session missing them
+  if(!S.colFilters) S.colFilters={date:"",docType:"",extDoc:"",acctType:"",acctNo:"",amount:"",balType:"",balNo:"",ccy:"",status:""};
+  if(!S.colFilterOpen) S.colFilterOpen=null;
+  if(!S.filterDesc) S.filterDesc="";
+  if(!S.filterIC) S.filterIC="all";
+  if(!S.voidMenuOpen) S.voidMenuOpen=false;
+  if(!S.ruleFilter) S.ruleFilter={entity:"",bank:"",keyword:""};
   const s=getSummary();
   const filtered=getFiltered();
   const ents=[...new Set(S.txns.map(t=>t.entity).filter(Boolean))];
