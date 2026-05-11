@@ -568,13 +568,23 @@ function getSummary(){
 }
 
 function getFiltered(){
-  return S.txns.filter(t=>
-    (S.filterEntity==="all"||t.entity===S.filterEntity)&&
-    (S.filterStatus==="all"||t.status===S.filterStatus)&&
-    (S.filterType==="all"||t.type===S.filterType)&&
-    (S.filterCcy==="all"||t.currency===S.filterCcy)&&
-    (S.filterColor==="all"||t.rowColor===S.filterColor)
-  );
+  return S.txns.filter(t=>{
+    if(S.filterEntity!=="all"){
+      // Handle both "EntityName|acct" and plain "EntityName" formats
+      if(S.filterEntity.includes("|")){
+        var parts=S.filterEntity.split("|");
+        if(t.entity!==parts[0]||t.entityAcct!==parts[1]) return false;
+      } else {
+        if(t.entity!==S.filterEntity) return false;
+      }
+    }
+    if(S.filterStatus!=="all"&&t.status!==S.filterStatus) return false;
+    if(S.filterType!=="all"&&t.type!==S.filterType) return false;
+    if(S.filterCcy!=="all"&&t.currency!==S.filterCcy) return false;
+    if(S.filterColor==="noacct_active") return !t.accountNo;
+    if(S.filterColor!=="all"&&t.rowColor!==S.filterColor) return false;
+    return true;
+  });
 }
 
 // Duplicate payment detector (same vendor + same amount within 7 days)
@@ -838,12 +848,26 @@ function renderUpload(){
   const ccys=[...new Set(S.txns.map(t=>t.currency).filter(Boolean))];
   const allEnts=allEntities();
 
+  const lastSession = S.sessions[0]||null;
   let html=`
-    <div class="drop-zone" id="dz" onclick="document.getElementById('cfi').click()">
-      <input type="file" id="cfi" accept=".csv" style="display:none">
-      <div style="font-size:28px;margin-bottom:6px">☁</div>
-      <p style="font-size:13px;font-weight:500;color:var(--text2)">Drop JP Morgan CSV or <span style="color:var(--blue)">click to browse</span></p>
-      <p style="font-size:11px;color:var(--text3);margin-top:3px">${allEnts.length} entities · EFT DEBIT/CREDIT · ACH · SWIFT · AUTOPAY all supported</p>
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:stretch">
+      <div class="drop-zone" id="dz" onclick="document.getElementById('cfi').click()" style="flex:1;margin-bottom:0;padding:16px 24px">
+        <input type="file" id="cfi" accept=".csv" style="display:none">
+        <div style="font-size:24px;margin-bottom:4px">☁</div>
+        <p style="font-size:13px;font-weight:500;color:var(--text2)">${S.txns.length>0?"Drop new CSV to replace current upload":"Drop JP Morgan CSV or"} <span style="color:var(--blue)">${S.txns.length>0?"or click to browse":"click to browse"}</span></p>
+        <p style="font-size:11px;color:var(--text3);margin-top:2px">${allEnts.length} entities · EFT DEBIT/CREDIT · ACH · SWIFT · AUTOPAY supported</p>
+      </div>
+      ${S.txns.length>0?`
+      <div style="display:flex;flex-direction:column;gap:6px;justify-content:center;min-width:180px">
+        <div class="card" style="padding:10px 14px;margin:0;border-color:var(--blue-bd);background:var(--blue-lt)">
+          <div style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Current Upload</div>
+          <div style="font-size:11px;font-weight:500;color:var(--text)">${lastSession?lastSession.file:"—"}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">${lastSession?lastSession.date:""} · ${s.total} transactions</div>
+        </div>
+        <button onclick="clearAndReupload()" class="btn-danger" style="width:100%;display:flex;align-items:center;justify-content:center;gap:6px">
+          🗑 Clear & Re-upload
+        </button>
+      </div>`:""}
     </div>`;
 
   if(S.unmappedCarry.length>0){
@@ -875,10 +899,17 @@ function renderUpload(){
         </span>
       </div>
       <div class="metric-grid">
-        ${[["Total",s.total,"var(--text)"],["Pending",s.pending,"var(--amber)"],["Approved",s.approved,"var(--green)"],
-           ["Flagged",s.flagged,"#f59e0b"],["Booked",s.booked,"var(--blue)"],["Rejected",s.rejected,"var(--red)"],
-           ["No Acct",s.unmatched,"var(--red)"]].map(([l,v,c])=>`
-        <div class="metric"><div class="metric-label">${l}</div><div class="metric-val" style="color:${c}">${v}</div></div>`).join("")}
+        ${[["Total","all",s.total,"var(--text)"],["Pending","pending",s.pending,"var(--amber)"],
+           ["Approved","approved",s.approved,"var(--green)"],["Flagged","flagged",s.flagged,"#f59e0b"],
+           ["Booked","booked",s.booked,"var(--blue)"],["Rejected","rejected",s.rejected,"var(--red)"],
+           ["No Acct","noacct",s.unmatched,"var(--red)"]].map(([l,fv,v,c])=>{
+          const active=fv==="noacct"?(S.filterStatus==="all"&&S.filterColor==="noacct_active"):
+            fv==="all"?(S.filterStatus==="all"&&S.filterColor==="all"):(S.filterStatus===fv);
+          return`<div class="metric" onclick="clickMetric('${fv}')" style="cursor:pointer;transition:all .15s;border:1px solid ${active?"var(--blue)":"var(--border)"};background:${active?"var(--blue-lt)":"var(--surface2)"};transform:${active?"translateY(-1px)":"none"}">
+            <div class="metric-label">${l}</div>
+            <div class="metric-val" style="color:${c}">${v}</div>
+            ${active?`<div style="font-size:9px;color:var(--blue);margin-top:2px">● filtered</div>`:""}
+          </div>`;}).join("")}
       </div>
       <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
       <p style="font-size:11px;color:var(--text3);margin-top:4px">${s.booked+s.approved}/${s.total} done · ${s.pending+s.flagged} need attention</p>
@@ -893,9 +924,27 @@ function renderUpload(){
       </div></div>`:""}
 
     <div class="filters">
-      <select onchange="setFilter('filterEntity',this.value)" style="min-width:180px">
-        <option value="all">All entities</option>
-        ${uniqueEntityNames().map(e=>{const o=allEnts.find(x=>x.name===e);const s=o?` (···${o.account.slice(-6)})`:"";return`<option value="${e}" ${S.filterEntity===e?"selected":""}>${e}${s}</option>`;}).join("")}
+      <select onchange="setFilter('filterEntity',this.value)" style="min-width:220px">
+        <option value="all">All entities (${ents.length} active)</option>
+        ${(function(){
+          // Show only entities+accounts that have transactions in current upload
+          // Group by entity+account so UK EUR and UK GBP show separately
+          var seen={};
+          S.txns.forEach(function(t){
+            var key=t.entity+"|"+t.entityAcct;
+            if(!seen[key]) seen[key]={entity:t.entity,acct:t.entityAcct,count:0};
+            seen[key].count++;
+          });
+          return Object.values(seen).sort(function(a,b){return a.entity.localeCompare(b.entity);}).map(function(item){
+            var entObj=allEnts.find(function(x){return x.account===item.acct;});
+            var ccy=entObj?entObj.currency:"";
+            var label=item.entity+" ···"+item.acct.slice(-6)+(ccy?" ("+ccy+")":"")+" ["+item.count+"]";
+            // Filter value uses entity|acct so both UK accounts appear separately
+            var filterVal=item.entity+"|"+item.acct;
+            var selected=(S.filterEntity===filterVal)?"selected":"";
+            return "<option value='"+filterVal+"' "+selected+">"+label+"</option>";
+          }).join("");
+        })()}
       </select>
       <select onchange="setFilter('filterStatus',this.value)">
         <option value="all">All statuses</option>
@@ -1410,15 +1459,21 @@ function renderRecon(){
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:8px">
       <div>
         <h2 style="font-size:15px;font-weight:600;margin-bottom:4px">Reconciliation</h2>
-        <p style="font-size:11px;color:var(--text3)">Daily bank balance vs booked transactions · Enter actual bank balance each day</p>
+        <p style="font-size:11px;color:var(--text3)">Daily bank balance vs booked transactions · variance per entity</p>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <select onchange="S.reconFilter=this.value;render()" style="height:32px">
           <option value="all">All entities</option>
           <option value="data">Has data only</option>
           <option value="balanced">✅ Balanced</option>
           <option value="unbalanced">⚠ Needs attention</option>
         </select>
+        <button onclick="showBalanceEntry()" class="btn-success" style="display:flex;align-items:center;gap:6px;padding:7px 16px">
+          📥 Enter Today's Balances
+        </button>
+        <button onclick="showOpeningBalanceEntry()" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">
+          🗓 Set Opening Balances
+        </button>
         <button onclick="exportRecon()" class="btn-primary btn-sm">⬇ Export</button>
       </div>
     </div>
@@ -1465,32 +1520,127 @@ function renderRecon(){
           ${entTxns.length>0?`
           <div class="progress-bar"><div class="progress-fill" style="width:${Math.round(booked.length/Math.max(entTxns.length,1)*100)}%"></div></div>
           <div style="font-size:10px;color:var(--text2);margin-top:2px;margin-bottom:6px">${booked.length}/${entTxns.length} booked · ${pending.length} pending</div>`:""}
-          <div style="border-top:1px solid var(--border);padding-top:6px;margin-top:2px">
-            <div style="font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Daily Balance Check</div>
-            ${ob===null?`<div style="font-size:10px;color:var(--amber);margin-bottom:4px">⚠ Set opening balance first</div>`:`<div style="font-size:10px;color:var(--text2);margin-bottom:4px">Opening: <strong>${en.currency} ${ob.toLocaleString("en-US",{minimumFractionDigits:2})}</strong></div>`}
-            <div style="display:flex;gap:4px;margin-bottom:4px">
-              <input type="number" placeholder="Opening bal" value="${ob||""}" step="0.01"
-                onclick="event.stopPropagation()"
-                onchange="event.stopPropagation();saveDailyBalance('${en.account}','opening',this.value)"
-                style="width:100%;font-size:10px;padding:3px 6px;height:26px" title="Set opening balance for this month">
-            </div>
-            <div style="font-size:10px;color:var(--text2);margin-bottom:4px">Expected: <strong style="font-family:'DM Mono',monospace">${en.currency} ${expected.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div>
-            <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
-              <input type="number" placeholder="Actual bank bal today" value="${actual!==null?actual:""}" step="0.01"
-                onclick="event.stopPropagation()"
-                onchange="event.stopPropagation();saveDailyBalance('${en.account}','${today2}',this.value)"
-                style="width:100%;font-size:10px;padding:3px 6px;height:26px" title="Enter actual closing balance from JP Morgan today">
-            </div>
+          <div style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px">
             ${actual!==null?`
-            <div style="font-size:11px;font-weight:600;padding:5px 8px;border-radius:4px;text-align:center;background:${balanced?"var(--green-lt)":"var(--red-lt)"};color:${balanced?"var(--green)":"var(--red)"}">
-              ${balanced?"✅ BALANCED":"⚠ Variance: "+en.currency+" "+variance.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}
+            <div style="font-size:11px;font-weight:600;padding:5px 8px;border-radius:6px;text-align:center;background:${balanced?"var(--green-lt)":"var(--red-lt)"};color:${balanced?"var(--green)":"var(--red)"}">
+              ${balanced?"✅ BALANCED":"⚠ "+en.currency+" "+variance.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})+" variance"}
             </div>
-            ${balMeta?`<div style="font-size:10px;color:var(--text3);text-align:center;margin-top:4px">Entered by ${balMeta.enteredBy} · ${balMeta.enteredAt}</div>`:""}
-            `:`<div style="font-size:10px;color:var(--text3);text-align:center">Enter today's bank balance ↑</div>`}
+            ${balMeta?`<div style="font-size:9px;color:var(--text3);text-align:center;margin-top:3px">${balMeta.enteredBy} · ${balMeta.enteredAt}</div>`:""}
+            `:`<div style="font-size:10px;color:var(--text3);text-align:center;padding:4px 0">No balance entered today<br><span style="font-size:9px">Use "Enter Today's Balances" button ↑</span></div>`}
           </div>
           <div style="font-size:10px;color:var(--blue);margin-top:8px">View transactions →</div>
         </div>`;
       }).join("")}
+    </div>`;
+}
+
+function showBalanceEntry(){
+  var ents = allEntities();
+  var today2 = new Date().toISOString().slice(0,10);
+  var todayFmt = new Date().toLocaleDateString("en-GB");
+  var rows = "";
+  ents.forEach(function(en){
+    var expected = getExpectedBalance(en.account);
+    var actual = getActualBalance(en.account, today2);
+    var meta = getBalanceMeta(en.account, today2);
+    var variance = actual!==null ? actual-expected : null;
+    var balanced = variance!==null && Math.abs(variance)<1;
+    rows += "<tr id='brow-"+en.account+"'>";
+    rows += "<td style='font-size:11px;font-weight:500;max-width:160px'>"+en.name+"</td>";
+    rows += "<td style='font-family:DM Mono,monospace;font-size:10px;color:var(--text3)'>"+en.currency+" ···"+en.account.slice(-6)+"</td>";
+    rows += "<td style='font-family:DM Mono,monospace;font-size:11px;font-weight:500'>"+en.currency+" "+expected.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})+"</td>";
+    rows += "<td><input type='number' id='bal-"+en.account+"' value='"+(actual!==null?actual:"")+"' placeholder='Enter closing balance' step='0.01' style='width:160px;font-size:12px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;height:32px' onchange='updateBalanceRow(&#39;"+en.account+"&#39;,this.value,&#39;"+expected+"&#39;)'></td>";
+    rows += "<td id='var-"+en.account+"' style='font-size:11px;font-weight:600'>";
+    if(variance!==null){
+      rows += "<span style='color:"+(balanced?"var(--green)":"var(--red)")+"'>"+(balanced?"✅ OK":"⚠ "+en.currency+" "+Math.abs(variance).toFixed(2))+"</span>";
+    } else { rows += "<span style='color:var(--text3)'>—</span>"; }
+    rows += "</td>";
+    rows += "<td style='font-size:10px;color:var(--text3)'>"+(meta?meta.enteredBy+" · "+meta.enteredAt:"—")+"</td>";
+    rows += "</tr>";
+  });
+
+  document.getElementById("modal-container").innerHTML = `
+    <div class="modal-bg" onclick="closeModal()">
+      <div class="modal" onclick="event.stopPropagation()" style="min-width:800px;max-width:95vw">
+        <div class="modal-title">
+          📥 Enter Today's Closing Balances — ${todayFmt}
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <p style="font-size:11px;color:var(--text3);margin-bottom:12px">Enter the actual closing balance from JP Morgan for each account. Press Tab to move between fields.</p>
+        <div style="overflow:auto;max-height:60vh;border:1px solid var(--border);border-radius:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="background:#f8f9fb;position:sticky;top:0">
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Entity</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Account</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Expected Balance</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Actual Bank Balance ✏</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Variance</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Last Updated</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px">
+          <p style="font-size:11px;color:var(--text3)">Changes save automatically as you type ✓</p>
+          <button onclick="closeModal()" class="btn-primary">Done ✓</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function updateBalanceRow(account, value, expected){
+  var amt = parseFloat(String(value).replace(/,/g,""))||0;
+  var exp = parseFloat(expected)||0;
+  var variance = amt - exp;
+  var balanced = Math.abs(variance)<1;
+  // Update variance cell live
+  var varCell = document.getElementById("var-"+account);
+  if(varCell){
+    varCell.innerHTML = "<span style='color:"+(balanced?"var(--green)":"var(--red)")+"'>"+(balanced?"✅ OK":"⚠ "+Math.abs(variance).toFixed(2))+"</span>";
+  }
+  // Save immediately
+  var today2 = new Date().toISOString().slice(0,10);
+  saveDailyBalance(account, today2, amt);
+}
+
+function showOpeningBalanceEntry(){
+  var ents = allEntities();
+  var rows = "";
+  ents.forEach(function(en){
+    var ob = S.dailyBalances[en.account] && S.dailyBalances[en.account]["opening"] ? S.dailyBalances[en.account]["opening"] : "";
+    var obBy = S.dailyBalances[en.account] && S.dailyBalances[en.account]["opening_by"] ? S.dailyBalances[en.account]["opening_by"] : "";
+    rows += "<tr>";
+    rows += "<td style='font-size:11px;font-weight:500;padding:8px 12px'>"+en.name+"</td>";
+    rows += "<td style='font-family:DM Mono,monospace;font-size:10px;color:var(--text3);padding:8px 12px'>"+en.currency+" ···"+en.account.slice(-6)+"</td>";
+    rows += "<td style='padding:8px 12px'><input type='number' value='"+(ob||"")+"' placeholder='Opening balance' step='0.01' style='width:160px;font-size:12px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;height:32px' onchange='saveDailyBalance(&#39;"+en.account+"&#39;,&#39;opening&#39;,this.value)'></td>";
+    rows += "<td style='font-size:10px;color:var(--text3);padding:8px 12px'>"+(obBy||"—")+"</td>";
+    rows += "</tr>";
+  });
+
+  document.getElementById("modal-container").innerHTML = `
+    <div class="modal-bg" onclick="closeModal()">
+      <div class="modal" onclick="event.stopPropagation()" style="min-width:700px;max-width:90vw">
+        <div class="modal-title">
+          🗓 Set Opening Balances
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <p style="font-size:11px;color:var(--text3);margin-bottom:12px">Enter the opening balance for each account at the start of the month. Set once per month only.</p>
+        <div style="overflow:auto;max-height:60vh;border:1px solid var(--border);border-radius:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="background:#f8f9fb;position:sticky;top:0">
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Entity</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Account</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Opening Balance ✏</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Set By</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px">
+          <p style="font-size:11px;color:var(--text3)">Changes save automatically ✓</p>
+          <button onclick="closeModal()" class="btn-primary">Done ✓</button>
+        </div>
+      </div>
     </div>`;
 }
 
@@ -1671,15 +1821,52 @@ function renderDashboard(){
   const totalPending=S.txns.filter(t=>t.status==="pending"||t.status==="flagged").length;
 
   return`
-    <h2 style="font-size:15px;font-weight:600;margin-bottom:4px">Team Dashboard</h2>
-    <p style="font-size:11px;color:var(--text3);margin-bottom:16px">Daily booking progress by person — who did what today</p>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <div>
+        <h2 style="font-size:15px;font-weight:600">Team Dashboard</h2>
+        <p style="font-size:11px;color:var(--text3);margin-top:2px">${new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</p>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="setTab(0)" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">→ Upload & Review</button>
+        <button onclick="setTab(3)" class="btn-sm" style="background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">→ Reconciliation</button>
+      </div>
+    </div>
 
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:20px">
-      <div class="metric"><div class="metric-label">Total Txns</div><div class="metric-val">${S.txns.length}</div></div>
-      <div class="metric"><div class="metric-label">Booked</div><div class="metric-val" style="color:var(--blue)">${bookedTxns.length}</div></div>
-      <div class="metric"><div class="metric-label">Pending</div><div class="metric-val" style="color:var(--amber)">${totalPending}</div></div>
-      <div class="metric"><div class="metric-label">Total Credits</div><div class="metric-val" style="color:var(--green);font-size:14px">${fmtAmt(totalCredits)}</div></div>
-      <div class="metric"><div class="metric-label">Total Debits</div><div class="metric-val" style="color:var(--red);font-size:14px">${fmtAmt(totalDebits)}</div></div>
+    <!-- Morning briefing cards -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:20px">
+      <div class="card" style="border-left:4px solid var(--blue);padding:12px 16px;cursor:pointer" onclick="setTab(0)">
+        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Need Mapping</div>
+        <div style="font-size:28px;font-weight:700;color:${totalPending>0?"var(--amber)":"var(--green)"}">${totalPending}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">${totalPending>0?"Need attention":"All clear ✅"}</div>
+      </div>
+      <div class="card" style="border-left:4px solid var(--green);padding:12px 16px;cursor:pointer" onclick="setTab(0);clickMetric('booked')">
+        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Booked Today</div>
+        <div style="font-size:28px;font-weight:700;color:var(--green)">${bookedTxns.length}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">of ${S.txns.length} total</div>
+      </div>
+      <div class="card" style="border-left:4px solid var(--green);padding:12px 16px">
+        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Total Credits</div>
+        <div style="font-size:20px;font-weight:700;color:var(--green)">${fmtAmt(totalCredits)}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Cash in</div>
+      </div>
+      <div class="card" style="border-left:4px solid var(--red);padding:12px 16px">
+        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Total Debits</div>
+        <div style="font-size:20px;font-weight:700;color:var(--red)">${fmtAmt(totalDebits)}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Cash out</div>
+      </div>
+      ${(function(){
+        var ents=allEntities();
+        var today2=new Date().toISOString().slice(0,10);
+        var noBalance=ents.filter(function(en){
+          return S.txns.concat(S.bookings).some(function(t){return t.entityAcct===en.account;}) &&
+                 getActualBalance(en.account,today2)===null;
+        }).length;
+        return `<div class="card" style="border-left:4px solid ${noBalance>0?"#f59e0b":"var(--green)"};padding:12px 16px;cursor:pointer" onclick="setTab(3)">
+          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Balances Pending</div>
+          <div style="font-size:28px;font-weight:700;color:${noBalance>0?"#f59e0b":"var(--green)"}">${noBalance}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">${noBalance>0?"Accounts need balance":"All entered ✅"}</div>
+        </div>`;
+      })()}
     </div>
 
     <h3 style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--text3);margin-bottom:10px">Team Activity</h3>
@@ -1762,11 +1949,26 @@ function renderMonthly(){
   const rows=Object.values(monthly).sort((a,b)=>a.entity.localeCompare(b.entity)||a.month.localeCompare(b.month));
 
   return`
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
       <div><h2 style="font-size:15px;font-weight:600">Monthly Summary</h2>
       <p style="font-size:11px;color:var(--text3)">Credits vs Debits per entity per month</p></div>
-      <button onclick="exportMonthly()" class="btn-primary btn-sm">⬇ Export to Excel/CSV</button>
+      <button onclick="exportMonthly()" class="btn-primary btn-sm">⬇ Export CSV</button>
     </div>
+    ${(function(){
+      var allTxns=S.txns.concat(S.bookings);
+      var totalC=allTxns.filter(function(t){return t.type==="Cash Receipt";}).reduce(function(s,t){return s+t.amount;},0);
+      var totalD=allTxns.filter(function(t){return t.type==="Payment Journal";}).reduce(function(s,t){return s+t.amount;},0);
+      var totalB=allTxns.filter(function(t){return t.status==="booked";}).length;
+      var entCount=[...new Set(allTxns.map(function(t){return t.entity;}))].length;
+      if(allTxns.length===0) return "";
+      return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:16px">
+        <div class="metric" style="border-left:3px solid var(--green)"><div class="metric-label">Total Credits</div><div class="metric-val" style="color:var(--green);font-size:16px">${fmtAmt(totalC)}</div></div>
+        <div class="metric" style="border-left:3px solid var(--red)"><div class="metric-label">Total Debits</div><div class="metric-val" style="color:var(--red);font-size:16px">${fmtAmt(totalD)}</div></div>
+        <div class="metric" style="border-left:3px solid var(--blue)"><div class="metric-label">Net Flow</div><div class="metric-val" style="color:${totalC-totalD>=0?"var(--green)":"var(--red)"};font-size:16px">${fmtAmt(totalC-totalD)}</div></div>
+        <div class="metric"><div class="metric-label">Booked Entries</div><div class="metric-val" style="color:var(--blue)">${totalB}</div></div>
+        <div class="metric"><div class="metric-label">Entities Active</div><div class="metric-val">${entCount}</div></div>
+      </div>`;
+    })()}
     ${rows.length===0?`<p style="font-size:12px;color:var(--text3)">No data yet — upload a bank CSV first.</p>`:`
     <div class="tbl-wrap">
       <table class="month-table">
@@ -2007,6 +2209,51 @@ async function handleFile(file){
   spSaveTxns(S.txns); spSaveSession(sess);
 }
 
+function clearAndReupload(){
+  var flaggedCount = S.txns.filter(function(t){return t.status==="flagged";}).length;
+  var bookedCount  = S.txns.filter(function(t){return t.status==="booked";}).length;
+  var pendingCount = S.txns.filter(function(t){return t.status==="pending";}).length;
+
+  // Build options message
+  var choice = null;
+  if(flaggedCount>0){
+    var msg = "You have "+S.txns.length+" transactions loaded:\n";
+    msg += "  - "+bookedCount+" booked\n";
+    msg += "  - "+flaggedCount+" flagged/parked (team waiting on these)\n";
+    msg += "  - "+pendingCount+" pending\n\n";
+    msg += "How would you like to clear?\n\n";
+    msg += "1 = Clear pending only (keep flagged + booked)\n";
+    msg += "2 = Clear everything (fresh start)\n";
+    msg += "Cancel = Do nothing";
+    choice = prompt(msg, "1");
+    if(!choice) return;
+  } else {
+    if(!confirm("Clear all "+S.txns.length+" transactions and upload a new file?\n\nBooked entries stay in history.")) return;
+    choice = "2";
+  }
+
+  var kept = [];
+  if(choice==="1"){
+    // Keep flagged and booked
+    kept = S.txns.filter(function(t){return t.status==="flagged"||t.status==="booked";});
+    audit("CLEAR_PENDING","Cleared "+pendingCount+" pending, kept "+kept.length+" flagged/booked");
+  } else {
+    kept = [];
+    audit("CLEAR_ALL","Cleared all "+S.txns.length+" transactions. File: "+(S.sessions[0]?S.sessions[0].file:"unknown"));
+  }
+
+  S.txns = kept;
+  S.skipped=[];S.unmatched=[];
+  S.selectedTxns=new Set();
+  S.filterEntity="all";S.filterStatus="all";S.filterType="all";S.filterCcy="all";S.filterColor="all";
+  saveSession();render();
+
+  setTimeout(function(){
+    var cfi=document.getElementById("cfi");
+    if(cfi) cfi.click();
+  },300);
+}
+
 function loadCarryForward(){
   S.txns=[...S.unmappedCarry,...S.txns];
   S.unmappedCarry=[];
@@ -2016,6 +2263,19 @@ function loadCarryForward(){
 
 function setTab(i){S.tab=i;S.editId=null;render();}
 function setFilter(k,v){S[k]=v;render();}
+
+function clickMetric(fv){
+  if(fv==="all"){
+    S.filterStatus="all"; S.filterColor="all"; S.filterEntity="all";
+  } else if(fv==="noacct"){
+    if(S.filterColor==="noacct_active"){ S.filterColor="all"; S.filterStatus="all"; }
+    else { S.filterColor="noacct_active"; S.filterStatus="all"; }
+  } else {
+    S.filterStatus = S.filterStatus===fv ? "all" : fv;
+    S.filterColor="all";
+  }
+  render();
+}
 function startEdit(id){
   const t=S.txns.find(x=>x.id===id);
   if(t?.locked||t?.status==="booked"){alert("This entry is locked and cannot be edited.");return;}
@@ -2106,8 +2366,29 @@ async function saveAndLearn(id){
     entity:t.entity,entityAcct:t.entityAcct||""};
   S.rules=[...S.rules,rule];
   ls("brp3_rules",S.rules);
-  audit("RULE_AUTO",`${rule.name} for ${t.entity}`);
+  audit("RULE_AUTO",rule.name+" for "+t.entity);
   spSaveRule(rule);
+  // Auto-apply to other matching pending transactions
+  var reapplied2=0;
+  S.txns=S.txns.map(function(tx){
+    if(tx.id===id) return tx; // already handled above
+    if(tx.locked||tx.status==="booked"||tx.status==="rejected"||tx.status==="voided") return tx;
+    if(rule.entity&&rule.entity!==tx.entity) return tx;
+    var keyword=rule.descContains.toLowerCase();
+    var match=(tx.description||"").toLowerCase().indexOf(keyword)>=0||
+              (tx.rawDesc||"").toLowerCase().indexOf(keyword)>=0||
+              (tx.cleanDesc||"").toLowerCase().indexOf(keyword)>=0;
+    if(match){
+      reapplied2++;
+      return Object.assign({},tx,{accountType:rule.accountType,accountNo:rule.accountNo,
+        balAccountType:rule.balAccountType,balAccountNo:rule.balAccountNo,
+        confidence:80,matchedRule:rule.name,status:"approved",rowColor:"green"});
+    }
+    return tx;
+  });
+  if(reapplied2>0){
+    addAlert("info","Rule auto-applied to "+reapplied2+" more matching transactions");
+  }
   saveSession();render();
 }
 
@@ -2120,17 +2401,29 @@ async function saveRule(){
   S.rules=[...S.rules,rule];
   ls("brp3_rules",S.rules);
   audit("RULE_ADD",`${rule.name}`);
-  // Auto-apply new rule to existing pending transactions
+  // Auto-apply new rule to ALL matching pending/flagged transactions
   var reapplied=0;
   S.txns=S.txns.map(function(t){
-    if(t.status==="booked"||t.status==="rejected"||t.locked) return t;
+    // Skip locked, booked, rejected, voided
+    if(t.locked||t.status==="booked"||t.status==="rejected"||t.status==="voided") return t;
+    // Skip if rule is entity-specific and doesn't match
     if(rule.entity&&rule.entity!==t.entity) return t;
     if(rule.entityAcct&&rule.entityAcct!==t.entityAcct) return t;
-    if(rule.descContains&&t.description.toLowerCase().indexOf(rule.descContains.toLowerCase())>=0){
+    // Skip if rule is type-specific and doesn't match
+    if(rule.type&&rule.type!==t.type) return t;
+    // Check keyword against description, rawDesc AND cleanDesc
+    var keyword=rule.descContains.toLowerCase();
+    var descMatch=(t.description||"").toLowerCase().indexOf(keyword)>=0;
+    var rawMatch=(t.rawDesc||"").toLowerCase().indexOf(keyword)>=0;
+    var cleanMatch=(t.cleanDesc||"").toLowerCase().indexOf(keyword)>=0;
+    if(keyword&&(descMatch||rawMatch||cleanMatch)){
       reapplied++;
-      return Object.assign({},t,{accountType:rule.accountType,accountNo:rule.accountNo,
-        balAccountType:rule.balAccountType,balAccountNo:rule.balAccountNo,
-        confidence:80,matchedRule:rule.name,status:"approved",rowColor:"green"});
+      return Object.assign({},t,{
+        accountType:rule.accountType, accountNo:rule.accountNo,
+        balAccountType:rule.balAccountType, balAccountNo:rule.balAccountNo,
+        confidence:80, matchedRule:rule.name,
+        status:"approved", rowColor:"green"
+      });
     }
     return t;
   });
