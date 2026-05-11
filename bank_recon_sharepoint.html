@@ -1169,8 +1169,9 @@ function _renderUploadInner(){
       </select>
       <button onclick="bulkOK()" class="btn-success btn-sm">✓ Bulk OK green (${s.green})</button>
       <div style="position:relative;display:flex;align-items:center">
-        <input placeholder="🔍 Search description or vendor…" value="${S.filterDesc||''}"
-          oninput="S.filterDesc=this.value;render()"
+        <input placeholder="🔍 Search description or vendor…" id="desc-search-input"
+          value="${S.filterDesc||''}"
+          oninput="S.filterDesc=this.value;clearTimeout(window._descTimer);window._descTimer=setTimeout(function(){render();},300)"
           style="width:220px;height:32px;padding:0 28px 0 10px;border:1px solid ${S.filterDesc?"var(--blue)":"var(--border)"};border-radius:var(--radius);font-size:12px">
         ${S.filterDesc?`<button onclick="S.filterDesc='';render()" style="position:absolute;right:6px;background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;padding:0;line-height:1">✕</button>`:""}
       </div>
@@ -2037,39 +2038,72 @@ function openReconDrawer(reconKey){
   const drawerHtml=`
     <div class="drawer-bg" onclick="closeDrawer()"></div>
     <div class="drawer">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <!-- HEADER -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-shrink:0">
         <div>
-          <h3 style="font-size:14px;font-weight:600">${eName}</h3>
-          <p style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace">···${eAcct.slice(-6)}</p>
+          <h2 style="font-size:18px;font-weight:700">${eName}</h2>
+          <p style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;margin-top:2px">Account ···${eAcct.slice(-6)}</p>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
           <button onclick="goToUploadFiltered('${eName}','${eAcct}')" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">→ View in Upload tab</button>
-          <button onclick="closeDrawer()" class="modal-close">✕</button>
+          <button onclick="closeDrawer()" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;width:32px;height:32px;font-size:18px;cursor:pointer">✕</button>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
-        <div class="metric"><div class="metric-label">Credits</div><div class="metric-val" style="color:var(--green);font-size:16px">${fmtAmt(credits)}</div></div>
-        <div class="metric"><div class="metric-label">Debits</div><div class="metric-val" style="color:var(--red);font-size:16px">${fmtAmt(debits)}</div></div>
-        <div class="metric"><div class="metric-label">Net</div><div class="metric-val" style="font-size:16px">${fmtAmt(credits-debits)}</div></div>
+      <!-- STATS -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;flex-shrink:0">
+        <div class="metric" style="border-left:3px solid var(--green)"><div class="metric-label">Credits</div><div class="metric-val" style="color:var(--green);font-size:14px">${fmtAmt(credits)}</div></div>
+        <div class="metric" style="border-left:3px solid var(--red)"><div class="metric-label">Debits</div><div class="metric-val" style="color:var(--red);font-size:14px">${fmtAmt(debits)}</div></div>
+        <div class="metric" style="border-left:3px solid var(--blue)"><div class="metric-label">Net</div><div class="metric-val" style="font-size:14px">${fmtAmt(credits-debits)}</div></div>
+        <div class="metric" style="border-left:3px solid var(--blue)"><div class="metric-label">Booked</div><div class="metric-val" style="color:var(--blue)">${entTxns.filter(t=>t.status==="booked").length} / ${entTxns.length}</div></div>
       </div>
-      <div style="overflow:auto;border:1px solid var(--border);border-radius:var(--radius);max-height:calc(100vh - 280px)">
-        <table style="width:100%;border-collapse:collapse;font-size:11px">
-          <thead><tr style="background:#f8f9fb">
-            <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Date</th>
-            <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Description</th>
-            <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Type</th>
-            <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Amount</th>
-            <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Account No.</th>
-            <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Status</th>
+      <!-- ADMIN VOID ACTIONS -->
+      ${canAdmin()?`
+      <div style="background:#fff3f2;border:1px solid #fda29b;border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex-shrink:0">
+        <span style="font-size:11px;font-weight:600;color:var(--red)">🗑 Admin — Void entries:</span>
+        <button onclick="drawerSelectBooked('${eName}','${eAcct}')" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">
+          ☑ Select all booked (${entTxns.filter(t=>t.status==="booked").length})
+        </button>
+        <button onclick="drawerSelectAll(true)" class="btn-sm" style="background:var(--surface2);color:var(--text2)">
+          ☑ Select all entries
+        </button>
+        <span id="drawer-sel-count" style="display:none;background:var(--blue-lt);color:var(--blue);padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600">0 selected</span>
+        <button id="drawer-void-btn" onclick="drawerVoidSelected('${eName}','${eAcct}')" style="display:none;background:var(--red);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">🗑 Void selected</button>
+        <button id="drawer-restore-btn" onclick="drawerRestoreSelected('${eName}','${eAcct}')" style="display:none;background:var(--amber-lt);color:var(--amber);border:1px solid var(--amber-bd);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer">↩ Restore selected</button>
+        <button onclick="drawerClearSel()" id="drawer-clear-btn" style="display:none;background:none;border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer">✕ Clear</button>
+        <span style="font-size:10px;color:var(--text3);margin-left:auto">Voided = excluded from balance</span>
+      </div>`:""}
+      <!-- TABLE -->
+      <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;flex:1">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="background:#f8f9fb;position:sticky;top:0;z-index:2">
+            ${canAdmin()?`<th style="padding:8px 12px;border-bottom:1px solid var(--border)"><input type="checkbox" onchange="drawerSelectAll(this.checked)"></th>`:""}
+            <th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border);white-space:nowrap">Date</th>
+            <th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Description</th>
+            <th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Type</th>
+            <th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Amount</th>
+            <th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Account No.</th>
+            <th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:600;color:var(--text2);border-bottom:1px solid var(--border)">Status</th>
           </tr></thead>
-          <tbody>${entTxns.map(t=>`<tr style="border-bottom:1px solid #f4f5f7">
-            <td style="padding:6px 10px;font-family:'DM Mono',monospace;font-size:10px;white-space:nowrap">${t.date}</td>
-            <td style="padding:6px 10px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.description}">${t.cleanDesc||t.description}</td>
-            <td style="padding:6px 10px">${t.type==="Cash Receipt"?`<span class="badge badge-green">Receipt</span>`:`<span class="badge badge-red">Payment</span>`}</td>
-            <td style="padding:6px 10px;font-weight:600;font-family:'DM Mono',monospace;color:${t.type==="Cash Receipt"?"var(--green)":"var(--red)"}">${t.type==="Cash Receipt"?"+":"-"}${fmtAmt(t.amount)}</td>
-            <td style="padding:6px 10px;font-family:'DM Mono',monospace;font-size:10px;color:${t.accountNo?"var(--blue)":"var(--red)"}">${t.accountNo||"missing"}</td>
-            <td style="padding:6px 10px">${{pending:`<span class="badge badge-grey">Pending</span>`,approved:`<span class="badge badge-green">Approved</span>`,booked:`<span class="badge badge-blue">Booked</span>`,flagged:`<span class="badge badge-amber">Flagged</span>`,rejected:`<span class="badge badge-red">Rejected</span>`}[t.status]||t.status}</td>
-          </tr>`).join("")}</tbody>
+          <tbody>${entTxns.map(t=>{
+            const isVoided=t.status==="voided";
+            const rowStyle=isVoided?"opacity:.4;text-decoration:line-through;background:#fafafa":
+              t.status==="booked"?"background:#f0fdf6":"";
+            const statusMap={pending:`<span class="badge badge-grey">Pending</span>`,
+              approved:`<span class="badge badge-green">Approved</span>`,
+              booked:`<span class="badge badge-blue">Booked</span>`,
+              flagged:`<span class="badge badge-amber">Flagged</span>`,
+              rejected:`<span class="badge badge-red">Rejected</span>`,
+              voided:`<span class="badge badge-grey">Voided</span>`};
+            return`<tr style="border-bottom:1px solid #f4f5f7;${rowStyle}" data-txnid="${t.id}">
+              ${canAdmin()?`<td style="padding:6px 12px"><input type="checkbox" class="drawer-chk" data-id="${t.id}" onchange="drawerChkChange()"></td>`:""}
+              <td style="padding:6px 12px;font-family:'DM Mono',monospace;font-size:11px;white-space:nowrap">${t.date}</td>
+              <td style="padding:6px 12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.description}">${t.cleanDesc||t.description}</td>
+              <td style="padding:6px 12px">${t.type==="Cash Receipt"?`<span class="badge badge-green">Receipt</span>`:`<span class="badge badge-red">Payment</span>`}</td>
+              <td style="padding:6px 12px;font-weight:600;font-family:'DM Mono',monospace;color:${t.type==="Cash Receipt"?"var(--green)":"var(--red)"}">${t.type==="Cash Receipt"?"+":"-"}${fmtAmt(t.amount)}</td>
+              <td style="padding:6px 12px;font-family:'DM Mono',monospace;font-size:11px;color:${t.accountNo?"var(--blue)":"var(--red)"}">${t.accountNo||"missing"}</td>
+              <td style="padding:6px 12px">${statusMap[t.status]||t.status}</td>
+            </tr>`;
+          }).join("")}</tbody>
         </table>
       </div>
     </div>`;
