@@ -967,13 +967,42 @@ function renderTopbar(){
 
 // ─── TAB 0: UPLOAD & REVIEW ──────────────────────────
 function renderUpload(){
-  // Safety: initialise all new state props in case old localStorage session missing them
-  if(!S.colFilters) S.colFilters={date:"",docType:"",extDoc:"",acctType:"",acctNo:"",amount:"",balType:"",balNo:"",ccy:"",status:""};
-  if(!S.colFilterOpen) S.colFilterOpen=null;
-  if(!S.filterDesc) S.filterDesc="";
-  if(!S.filterIC) S.filterIC="all";
-  if(!S.voidMenuOpen) S.voidMenuOpen=false;
-  if(!S.ruleFilter) S.ruleFilter={entity:"",bank:"",keyword:""};
+  // Safety: reset ALL potentially missing state
+  S.colFilters = S.colFilters || {date:"",docType:"",extDoc:"",acctType:"",acctNo:"",amount:"",balType:"",balNo:"",ccy:"",status:""};
+  S.colFilterOpen = S.colFilterOpen || null;
+  S.filterDesc = S.filterDesc || "";
+  S.filterIC = S.filterIC || "all";
+  S.voidMenuOpen = S.voidMenuOpen || false;
+  S.ruleFilter = S.ruleFilter || {entity:"",bank:"",keyword:""};
+  S.filterEntity = S.filterEntity || "all";
+  S.filterStatus = S.filterStatus || "all";
+  S.filterType = S.filterType || "all";
+  S.filterCcy = S.filterCcy || "all";
+  S.filterColor = S.filterColor || "all";
+  S.selectedTxns = S.selectedTxns || new Set();
+  try {
+    return _renderUploadInner();
+  } catch(e) {
+    console.error("renderUpload error:", e);
+    return `<div style="padding:24px">
+      <div style="background:#fef3f2;border:1px solid #fda29b;border-radius:8px;padding:16px;margin-bottom:16px">
+        <strong style="color:#b42318">⚠ Display error — refreshing state</strong>
+        <p style="font-size:12px;color:#b42318;margin-top:4px">${e.message}</p>
+        <button onclick="S.colFilters={date:'',docType:'',extDoc:'',acctType:'',acctNo:'',amount:'',balType:'',balNo:'',ccy:'',status:''};S.filterDesc='';S.filterIC='all';render()" 
+          style="margin-top:8px;background:#b42318;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer">
+          Reset & Retry
+        </button>
+      </div>
+      <div class="drop-zone" onclick="document.getElementById('cfi').click()">
+        <input type="file" id="cfi" accept=".csv" style="display:none">
+        <div style="font-size:28px;margin-bottom:6px">☁</div>
+        <p style="font-size:13px;font-weight:500;color:var(--text2)">Drop JP Morgan CSV or <span style="color:var(--blue)">click to browse</span></p>
+      </div>
+    </div>`;
+  }
+}
+
+function _renderUploadInner(){
   const s=getSummary();
   const filtered=getFiltered();
   const ents=[...new Set(S.txns.map(t=>t.entity).filter(Boolean))];
@@ -1178,6 +1207,7 @@ function renderUpload(){
     <p style="font-size:10px;color:var(--text3);margin-top:6px">🟢 Rule matched → OK &nbsp;·&nbsp; 🟡 Seen before → Confirm &nbsp;·&nbsp; 🔴 New → Edit & map &nbsp;·&nbsp; 🔒 Locked = booked</p>`;
   return html;
 }
+
 
 function renderExportMenu(ents){
   return`<div class="export-menu">
