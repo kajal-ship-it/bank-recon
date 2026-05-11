@@ -348,7 +348,7 @@ let S = {
   // ui
   editId:null, exportOpen:false, masterTab:"vendors",
   newMaster:{entity:"",no:"",name:"",currency:""},
-  masterMsg:"", masterFilter:"all",
+  masterMsg:"", masterFilter:"all", selectedMasterItems:new Set(),
   newRule:{name:"",descContains:"",entity:"",entityAcct:"",type:"",
     accountType:"Vendor",accountNo:"",balAccountType:"Bank Account",balAccountNo:""},
   ruleMsg:"",
@@ -1260,18 +1260,31 @@ function renderMaster(){
       ${!canApprove()?`<p style="font-size:11px;color:var(--amber);margin-top:8px">⏳ Needs admin/manager approval before it's available for mapping.</p>`:""}
     </div>
 
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-      <select onchange="S.masterFilter=this.value;render()" style="width:220px">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <select onchange="S.masterFilter=this.value;S.selectedMasterItems=new Set();render()" style="width:220px">
         <option value="all">All entities</option>
         ${uniqueEntityNames().map(n=>`<option value="${n}" ${S.masterFilter===n?"selected":""}>${n}</option>`).join("")}
       </select>
       <span style="font-size:11px;color:var(--text3)">${filtered.length} records</span>
+      ${canAdmin()?`
+        <button onclick="toggleSelectAllMaster(true)" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">Select all ${filtered.length}</button>
+        ${S.selectedMasterItems.size>0?`
+        <span class="badge badge-blue">${S.selectedMasterItems.size} selected</span>
+        <button onclick="deleteSelectedMaster('${mt}')" class="btn-sm btn-danger">🗑 Delete selected (${S.selectedMasterItems.size})</button>
+        <button onclick="S.selectedMasterItems=new Set();render()" class="btn-sm">Clear</button>
+        `:""}
+        <button onclick="deleteAllMaster('${mt}')" class="btn-sm btn-danger" style="margin-left:auto">🗑 Delete ALL ${mt}</button>
+      `:""}
     </div>
 
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Entity</th><th>No.</th><th>Name</th><th>Currency</th><th>Added By</th><th>Approved By</th>${canAdmin()?"<th>Del</th>":""}</tr></thead>
-        <tbody>${filtered.slice(0,300).map(item=>`<tr>
+        <thead><tr>
+          ${canAdmin()?`<th><input type="checkbox" onchange="toggleSelectAllMaster(this.checked)" ${S.selectedMasterItems.size===filtered.length&&filtered.length>0?"checked":""}></th>`:""}
+          <th>Entity</th><th>No.</th><th>Name</th><th>Currency</th><th>Added By</th><th>Approved By</th>${canAdmin()?"<th>Del</th>":""}
+        </tr></thead>
+        <tbody>${filtered.slice(0,500).map(item=>`<tr style="${S.selectedMasterItems.has(item.id)?"background:var(--blue-lt)":""}">
+          ${canAdmin()?`<td><input type="checkbox" ${S.selectedMasterItems.has(item.id)?"checked":""} onchange="toggleMasterItem('${item.id}',this.checked)"></td>`:""}
           <td style="font-size:10px;color:var(--text2)">${item.entity}</td>
           <td style="font-family:'DM Mono',monospace;font-size:11px;color:var(--blue)">${item.no}</td>
           <td>${item.name}</td>
@@ -1282,7 +1295,7 @@ function renderMaster(){
         </tr>`).join("")}</tbody>
       </table>
     </div>
-    ${filtered.length>300?`<p style="font-size:11px;color:var(--text3);margin-top:6px">Showing 300/${filtered.length} — filter by entity to see all</p>`:""}`;
+    ${filtered.length>500?`<p style="font-size:11px;color:var(--text3);margin-top:6px">Showing 500/${filtered.length} — filter by entity to see all</p>`:""}`;
 }
 
 function downloadTemplate(type){
@@ -1953,10 +1966,57 @@ function rejectItem(type,id){
 }
 
 function delMaster(type,id){
-  if(!confirm("Delete?"))return;
+  if(!confirm("Delete this item?"))return;
   if(type==="vendors"){S.vendors=S.vendors.filter(v=>v.id!==id);ls("brp3_vendors",S.vendors);}
   if(type==="customers"){S.customers=S.customers.filter(c=>c.id!==id);ls("brp3_customers",S.customers);}
   if(type==="gl"){S.glAccounts=S.glAccounts.filter(g=>g.id!==id);ls("brp3_gl",S.glAccounts);}
+  render();
+}
+
+function toggleMasterItem(id, checked){
+  if(checked) S.selectedMasterItems.add(id);
+  else S.selectedMasterItems.delete(id);
+  render();
+}
+
+function toggleSelectAllMaster(checked){
+  const mt=S.masterTab;
+  const allItems=mt==="vendors"?S.vendors:mt==="customers"?S.customers:S.glAccounts;
+  const filtered=S.masterFilter==="all"?allItems:allItems.filter(i=>i.entity===S.masterFilter);
+  if(checked) filtered.forEach(i=>S.selectedMasterItems.add(i.id));
+  else S.selectedMasterItems=new Set();
+  render();
+}
+
+function deleteSelectedMaster(type){
+  const count=S.selectedMasterItems.size;
+  if(!count) return;
+  if(!confirm("Delete "+count+" selected items? This cannot be undone.")) return;
+  const ids=S.selectedMasterItems;
+  if(type==="vendors"){S.vendors=S.vendors.filter(v=>!ids.has(v.id));ls("brp3_vendors",S.vendors);}
+  if(type==="customers"){S.customers=S.customers.filter(c=>!ids.has(c.id));ls("brp3_customers",S.customers);}
+  if(type==="gl"){S.glAccounts=S.glAccounts.filter(g=>!ids.has(g.id));ls("brp3_gl",S.glAccounts);}
+  S.selectedMasterItems=new Set();
+  audit("MASTER_BULK_DELETE", count+" "+type+" deleted");
+  render();
+}
+
+function deleteAllMaster(type){
+  const allItems=type==="vendors"?S.vendors:type==="customers"?S.customers:S.glAccounts;
+  const filtered=S.masterFilter==="all"?allItems:allItems.filter(i=>i.entity===S.masterFilter);
+  const label=S.masterFilter==="all"?"ALL "+type:"all "+type+" for "+S.masterFilter;
+  if(!confirm("Delete "+label+"? ("+filtered.length+" records)\n\nThis cannot be undone. Re-import your CSV after.")) return;
+  if(S.masterFilter==="all"){
+    if(type==="vendors"){S.vendors=[];ls("brp3_vendors",[]);}
+    if(type==="customers"){S.customers=[];ls("brp3_customers",[]);}
+    if(type==="gl"){S.glAccounts=[];ls("brp3_gl",[]);}
+  } else {
+    if(type==="vendors"){S.vendors=S.vendors.filter(v=>v.entity!==S.masterFilter);ls("brp3_vendors",S.vendors);}
+    if(type==="customers"){S.customers=S.customers.filter(c=>c.entity!==S.masterFilter);ls("brp3_customers",S.customers);}
+    if(type==="gl"){S.glAccounts=S.glAccounts.filter(g=>g.entity!==S.masterFilter);ls("brp3_gl",S.glAccounts);}
+  }
+  S.selectedMasterItems=new Set();
+  audit("MASTER_DELETE_ALL", label);
   render();
 }
 
