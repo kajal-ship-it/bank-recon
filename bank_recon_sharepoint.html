@@ -1043,8 +1043,9 @@ function renderUpload(){
       </div></div>`:""}
 
     <div class="filters">
+      <div style="display:flex;gap:6px;align-items:center">
       <select onchange="setFilter('filterEntity',this.value)" style="min-width:220px">
-        <option value="all">All entities (${ents.length} active)</option>
+        <option value="all">🌍 All entities (${ents.length} active)</option>
         ${(function(){
           // Show only entities+accounts that have transactions in current upload
           // Group by entity+account so UK EUR and UK GBP show separately
@@ -1065,6 +1066,8 @@ function renderUpload(){
           }).join("");
         })()}
       </select>
+      ${S.filterEntity!=="all"?`<button onclick="setFilter('filterEntity','all')" class="btn-xs" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd);white-space:nowrap">✕ Clear entity</button>`:""}
+      </div>
       <select onchange="setFilter('filterStatus',this.value)">
         <option value="all">All statuses</option>
         ${["pending","approved","flagged","booked","rejected"].map(x=>`<option value="${x}" ${S.filterStatus===x?"selected":""}>${x}</option>`).join("")}
@@ -1090,6 +1093,7 @@ function renderUpload(){
         <option value="red">🔴 New</option>
       </select>
       <button onclick="bulkOK()" class="btn-success btn-sm">✓ Bulk OK green (${s.green})</button>
+      ${S.filterDesc?`<button onclick="selectAllFiltered()" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">☑ Select all ${getFiltered().length} filtered</button>`:""}
       <div class="export-wrap" style="margin-left:auto">
         <button onclick="S.exportOpen=!S.exportOpen;render()" class="btn-primary btn-sm">Export ▾</button>
         ${S.exportOpen?renderExportMenu(ents):""}
@@ -1163,7 +1167,12 @@ function renderRow(t){
     extDocCell=`<span style="font-size:10px;color:var(--text3)">${t.reference||"—"}</span>`;
     const descText=(t.cleanDesc||t.description||"").slice(0,38);
     const icBadge=t.isIntercompany?`<span class="badge badge-purple" style="font-size:9px;margin-left:4px">IC</span>`:"";
-    descCell=`<span title="${t.description}" style="font-size:11px">${descText}${(t.cleanDesc||t.description||"").length>38?"…":""}${icBadge}</span>`;
+    const isFiltered=S.filterDesc===(t.cleanDesc||t.description||"").slice(0,38);
+    descCell=`<span title="Click to filter by this description
+${t.description}" 
+      onclick="event.stopPropagation();S.filterDesc=S.filterDesc==='${(t.cleanDesc||"").replace(/'/g,"\'")}' ? '' : '${(t.cleanDesc||"").replace(/'/g,"\'")}';render()"
+      style="font-size:11px;cursor:pointer;padding:2px 5px;border-radius:4px;${isFiltered?"background:var(--blue-lt);color:var(--blue);font-weight:600":""}hover:background:var(--surface2)"
+    >${descText}${(t.cleanDesc||t.description||"").length>38?"…":""}${icBadge}</span>`;
   }
 
   let actions="";
@@ -1185,8 +1194,11 @@ function renderRow(t){
   } else if(t.status==="voided"){
     actions=`<button onclick="undoVoid('${t.id}')" class="btn-sm" style="background:var(--amber-lt);color:var(--amber);border-color:var(--amber-bd);display:block;width:100%">↩ Restore</button>`;
   } else {
-    actions=`<span style="font-size:10px;color:var(--text3)">🔒 Locked</span>`;
-    if(canAdmin()) actions+=`<button onclick="unlockTxn('${t.id}')" class="btn-xs" style="margin-top:3px;display:block;width:100%;color:var(--amber)">🔓 Unlock</button>`;
+    actions=`<span style="font-size:10px;color:var(--text3)">🔒 Booked</span>`;
+    if(canAdmin()){
+      actions+=`<button onclick="unlockTxn('${t.id}')" class="btn-xs" style="margin-top:3px;display:block;width:100%;background:var(--amber-lt);color:var(--amber);border-color:var(--amber-bd);border-radius:4px;padding:3px 6px">🔓 Unlock</button>`;
+      actions+=`<button onclick="voidTxn('${t.id}')" class="btn-xs btn-danger" style="margin-top:3px;display:block;width:100%">🗑 Void</button>`;
+    }
   }
 
   return`<tr class="${rowCls}" data-id="${t.id}" onclick="handleRowClick(event,'${t.id}')">
@@ -1905,7 +1917,10 @@ function openReconDrawer(reconKey){
           <h3 style="font-size:14px;font-weight:600">${eName}</h3>
           <p style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace">···${eAcct.slice(-6)}</p>
         </div>
-        <button onclick="closeDrawer()" class="modal-close">✕</button>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button onclick="goToUploadFiltered('${eName}','${eAcct}')" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">→ View in Upload tab</button>
+          <button onclick="closeDrawer()" class="modal-close">✕</button>
+        </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
         <div class="metric"><div class="metric-label">Credits</div><div class="metric-val" style="color:var(--green);font-size:16px">${fmtAmt(credits)}</div></div>
@@ -1941,6 +1956,16 @@ function closeDrawer(){
   S.reconEntity=null;
 }
 
+function goToUploadFiltered(entityName, entityAcct){
+  // Jump to Upload tab filtered to this specific entity+account
+  S.filterEntity=entityName+"|"+entityAcct;
+  S.filterStatus="all";
+  S.filterDesc="";
+  S.tab=0;
+  closeDrawer();
+  render();
+}
+
 function drawerSelectAll(checked){
   var chks=document.querySelectorAll(".drawer-chk");
   chks.forEach(function(c){c.checked=checked!==undefined?checked:true;});
@@ -1949,6 +1974,17 @@ function drawerSelectAll(checked){
 
 function drawerClearSel(){
   document.querySelectorAll(".drawer-chk").forEach(function(c){c.checked=false;});
+  drawerChkChange();
+}
+
+function drawerSelectBooked(entityName, entityAcct){
+  // Select only booked entries for easy bulk void
+  var bookedIds = new Set(S.txns.concat(S.bookings)
+    .filter(function(t){return t.entity===entityName&&t.entityAcct===entityAcct&&t.status==="booked";})
+    .map(function(t){return t.id;}));
+  document.querySelectorAll(".drawer-chk").forEach(function(c){
+    c.checked = bookedIds.has(c.dataset.id);
+  });
   drawerChkChange();
 }
 
@@ -2691,6 +2727,34 @@ function startEdit(id){
 function cancelEdit(){S.editId=null;render();}
 function setMasterTab(t){S.masterTab=t;render();}
 function markAllRead(){S.alerts=S.alerts.map(a=>({...a,read:true}));ls("brp3_alerts",S.alerts);render();}
+function prefillRuleFromFilter(){
+  // Pre-fill the rule form with the current description filter and go to Rules tab
+  S.newRule.descContains = S.filterDesc;
+  S.newRule.name = S.filterDesc.slice(0,30);
+  // Try to pre-fill entity from filtered transactions
+  var filtered = getFiltered();
+  if(filtered.length>0){
+    var ents = [...new Set(filtered.map(t=>t.entity))];
+    if(ents.length===1) S.newRule.entity = ents[0];
+    // Try to pre-fill account type from majority
+    var acctTypes = filtered.filter(t=>t.accountType).map(t=>t.accountType);
+    if(acctTypes.length>0){
+      var most = acctTypes.sort((a,b)=>acctTypes.filter(x=>x===b).length-acctTypes.filter(x=>x===a).length)[0];
+      S.newRule.accountType = most;
+    }
+    var acctNos = filtered.filter(t=>t.accountNo).map(t=>t.accountNo);
+    if(acctNos.length>0){
+      var mostNo = acctNos.sort((a,b)=>acctNos.filter(x=>x===b).length-acctNos.filter(x=>x===a).length)[0];
+      S.newRule.accountNo = mostNo;
+    }
+  }
+  S.tab = 1;
+  S.ruleMsg = "✏ Pre-filled from filter — complete the rule and save";
+  render();
+  // Scroll to top of rules form
+  setTimeout(function(){ window.scrollTo(0,0); }, 100);
+}
+
 function clearOldAlerts(){
   if(!confirm("Clear all read alerts? Unread alerts will be kept.")) return;
   S.alerts=S.alerts.filter(a=>!a.read);
@@ -2711,6 +2775,11 @@ function toggleSelect(id,checked){
 function toggleSelectAll(checked){
   if(checked) getFiltered().forEach(t=>S.selectedTxns.add(t.id));
   else S.selectedTxns=new Set();
+  render();
+}
+
+function selectAllFiltered(){
+  getFiltered().forEach(t=>S.selectedTxns.add(t.id));
   render();
 }
 
@@ -3057,11 +3126,25 @@ function unlockTxn(id){
 function voidTxn(id){
   var t=S.txns.find(function(x){return x.id===id;});
   if(!t) return;
-  if(!confirm("Void this entry? It will be hidden but kept in history for audit.")) return;
+  var msg="Void this entry?\n\n";
+  msg+="Date: "+t.date+"\n";
+  msg+="Description: "+(t.cleanDesc||t.description)+"\n";
+  msg+="Amount: "+fmtAmt(t.amount)+"\n\n";
+  msg+="✅ Balance recalculates immediately\n";
+  msg+="✅ Kept in history for audit\n";
+  msg+="✅ Can be restored by admin\n";
+  msg+="❌ Will NOT export to D365";
+  if(!confirm(msg)) return;
   S.txns=S.txns.map(function(x){
-    return x.id===id?Object.assign({},x,{status:"voided",rowColor:"grey",voidedBy:S.user.name,voidedAt:new Date().toLocaleString()}):x;
+    return x.id===id?Object.assign({},x,{status:"voided",rowColor:"grey",locked:false,voidedBy:S.user.name,voidedAt:new Date().toLocaleString()}):x;
   });
-  audit("VOID","Entry: "+t.date+" | "+t.entity+" | "+fmtAmt(t.amount));
+  // Also remove from bookings so balance updates
+  S.bookings=S.bookings.map(function(x){
+    return x.id===id?Object.assign({},x,{status:"voided",voidedBy:S.user.name}):x;
+  });
+  ls("brp3_bookings",S.bookings);
+  audit("VOID",t.date+" | "+t.entity+" | "+fmtAmt(t.amount)+" | "+(t.cleanDesc||t.description));
+  addAlert("info",S.user.name+" voided: "+(t.cleanDesc||t.description)+" | "+fmtAmt(t.amount)+" | "+t.entity);
   saveSession();render();
 }
 
