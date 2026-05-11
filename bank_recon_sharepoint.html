@@ -344,15 +344,16 @@ let S = {
   spStatus:"local", syncing:false,
   // filters
   filterEntity:"all", filterStatus:"all", filterType:"all",
-  filterCcy:"all", filterColor:"all",
+  filterCcy:"all", filterColor:"all", filterDesc:"", filterIC:"all",
   selectedTxns: new Set(),
   // ui
   editId:null, editOriginal:null, exportOpen:false, masterTab:"vendors",
   newMaster:{entity:"",no:"",name:"",currency:""},
-  masterMsg:"", masterFilter:"all", selectedMasterItems:new Set(),
+  masterMsg:"", masterFilter:"all", masterSearch:"", selectedMasterItems:new Set(),
   newRule:{name:"",descContains:"",entity:"",entityAcct:"",type:"",
     accountType:"Vendor",accountNo:"",balAccountType:"Bank Account",balAccountNo:""},
-  ruleMsg:"",
+  ruleMsg:"", ruleFilter:{entity:"",bank:"",keyword:""},
+  ruleTestResult:null,
   showNewEntity:false, newEntity:{name:"",account:"",currency:"",bankName:""},
   reconEntity:null, drawerOpen:false,
   forgotMsg:"",
@@ -503,53 +504,112 @@ function cleanDesc(raw){
   if(!raw) return "";
   const r = raw.toUpperCase();
 
+  // INTERCOMPANY DETECTION - check before anything else
+  const isInterco = r.includes("EASYSHIP") || r.includes("GOSINCRO") || r.includes("GO SINCRO") || r.includes("ENOVIE");
+  const isBookTransfer = r.includes("BOOK TRANSFER");
+
   // 1. ORIG CO NAME= (ACH — most reliable)
   const m1 = raw.match(/ORIG CO NAME=([^,|]+)/i);
-  if(m1) return m1[1].trim();
+  if(m1){
+    let v = m1[1].trim();
+    // Normalize eBay variants
+    if(v.toUpperCase().startsWith("EBAY")) return "eBay";
+    // Normalize USPS variants
+    if(v.toUpperCase().startsWith("USPS")) return "USPS";
+    // Normalize UPS variants
+    if(v.toUpperCase().match(/^UPS[N\s]/)) return "UPS";
+    return v;
+  }
 
-  // 2. B/O CUSTOMER= — search full string including across remark pipes
+  // 2. B/O CUSTOMER= - strip address info after comma/number patterns
   const m2 = raw.match(/B\/O CUSTOMER=([^\r\n]+?)(?:\s*\|)/i);
-  if(m2 && m2[1].trim().length>1) return m2[1].trim().slice(0,60);
-  // Also match B/O CUSTOMER= at end of string
   const m2b = raw.match(/B\/O CUSTOMER=([^\r\n|]+)$/i);
-  if(m2b && m2b[1].trim().length>1) return m2b[1].trim().slice(0,60);
+  const boVal = (m2||m2b) ? ((m2||m2b)[1].trim()) : null;
+  if(boVal && boVal.length>1){
+    // Strip leading account numbers like "185008 10220213 Stripe..."
+    let v = boVal.replace(/^[\d\s]+/,"").trim();
+    // Strip address after company name (numbers/street keywords)
+    v = v.replace(/\s+\d{2,}.*$/,"").replace(/\s+(ST|AVE|BLVD|RD|DR|LN|WAY|SUITE|STE|FLOOR|FL|UNIT)\b.*/i,"").trim();
+    // Normalize known vendors
+    if(v.toUpperCase().includes("STRIPE")) return "STRIPE";
+    if(v.toUpperCase().includes("EBAY")) return "eBay";
+    if(v.length>2) return v.slice(0,60);
+  }
 
-  // 3. BENEFICIARY= — strip leading account numbers
+  // 3. BENEFICIARY= — strip account numbers and addresses
   const m3 = raw.match(/BENEFICIARY=([^|]+)/i);
-  if(m3){const b=m3[1].trim().replace(/^\d+\s+/,"");if(b.length>2) return b.slice(0,60);}
+  if(m3){
+    let b = m3[1].trim().replace(/^\d+\s+/,"");
+    // Strip address patterns
+    b = b.replace(/\s+\d{2,}.*$/,"").trim();
+    if(b.toUpperCase().includes("STRIPE")) return "STRIPE";
+    if(b.toUpperCase().includes("EBAY")) return "eBay";
+    if(b.length>2) return b.slice(0,60);
+  }
 
-  // 4. YOUR REF= with recognisable name prefix e.g. STRIPE_UQmoLp
+  // 4. YOUR REF= with name prefix
   const m4 = raw.match(/YOUR REF=([A-Za-z][A-Za-z0-9_-]+)/i);
-  if(m4){const v=m4[1].split(/[_-]/)[0].toUpperCase();if(v.length>2&&!/^\d+$/.test(v)) return v;}
+  if(m4){const v=m4[1].split(/[_-]/)[0].toUpperCase();if(v.length>2&&!/^\d+$/.test(v)&&v!=="ATS") return v;}
 
-  // 5. STRIPE anywhere
+  // 5. REC FROM= (book transfers - extract entity name)
+  const m5 = raw.match(/REC FROM=[\d\s]+([A-Z][A-Z\s.]+?)(?:\s+\d|$)/i);
+  if(m5) return m5[1].trim().slice(0,50)+" (Intercompany)";
+
+  // 6. PAID TO= (book transfer debits)
+  const m6 = raw.match(/PAID TO=[\d\s]+([A-Z][A-Z\s.,]+?)(?:\s+\d|\s+[A-Z]{2}\s|$)/i);
+  if(m6) return m6[1].trim().slice(0,50)+" (Intercompany)";
+
+  // 7. STRIPE anywhere
   if(r.includes("STRIPE")) return "STRIPE";
 
-  // 6. Number-prefixed name e.g. "71842658 MY FLYING BOX SAS"
-  const m6 = raw.match(/^\d{6,}\s+([A-Za-z][\w\s&.,\'"-]{3,})/);
-  if(m6) return m6[1].trim().slice(0,60);
+  // 8. Book Transfer - intercompany
+  if(isBookTransfer) return "BOOK TRANSFER (Intercompany)";
 
-  // 7. IBAN-prefixed name e.g. "GB37BOFA300... UNITED PARCEL"
-  const m7 = raw.match(/^[A-Z]{2}\d{2}[A-Z0-9]{4,}\s+([A-Za-z][\w\s&.,\'"-]{3,})/);
-  if(m7) return m7[1].trim().slice(0,60);
+  // 9. Number-prefixed name
+  const m9 = raw.match(/^\d{6,}\s+([A-Za-z][\w\s&.,\'"-]{3,})/);
+  if(m9){
+    let v = m9[1].trim();
+    if(v.toUpperCase().includes("STRIPE")) return "STRIPE";
+    return v.slice(0,60);
+  }
 
-  // 8. Common JP Morgan transaction types
+  // 10. IBAN-prefixed name
+  const m10 = raw.match(/^[A-Z]{2}\d{2}[A-Z0-9]{4,}\s+([A-Za-z][\w\s&.,\'"-]{3,})/);
+  if(m10){
+    let v = m10[1].trim().replace(/\s+\d{2,}.*$/,"");
+    if(v.toUpperCase().includes("STRIPE")) return "STRIPE";
+    if(v.toUpperCase().includes("EASYSHIP")||v.toUpperCase().includes("GOSINCRO")) return v.trim().slice(0,50)+" (Intercompany)";
+    return v.slice(0,60);
+  }
+
+  // 11. Common types
   if(r.includes("OUTGOING MONEY XFR")) return "OUTGOING MONEY XFR";
   if(r.includes("INCOMING MONEY XFR")) return "INCOMING MONEY XFR";
   if(r.includes("OUTGOING ACH PAYMENT")) return "OUTGOING ACH PAYMENT";
   if(r.includes("ACH CREDIT RECEIVED")) return "ACH CREDIT RECEIVED";
+  if(r.includes("REAL TIME PAYMENT")) return "REAL TIME PAYMENT";
   if(r.includes("INCOMING ACH DEBIT")) return "INCOMING ACH DEBIT";
   if(r.includes("EFT DEBIT")) return "EFT DEBIT";
   if(r.includes("EFT CREDIT")) return "EFT CREDIT";
+  if(r.includes("AUTOPAY")) return r.includes("DR")?"AUTOPAY (Debit)":"AUTOPAY (Credit)";
+  if(r.includes("DEBIT ACH SETTLEMENT")) return "DEBIT ACH SETTLEMENT";
   if(r.includes("PAY METHOD=INCOMING")||r.includes("INCOMING DEBIT")) return "INCOMING PAYMENT";
   if(r.includes("PAY METHOD=OUTGOING")||r.includes("OUTGOING DEBIT")) return "OUTGOING PAYMENT";
-  if(r.includes("BOOK TRANSFER")) return "BOOK TRANSFER";
-  if(r.includes("WIRE TRANSFER")) return "WIRE TRANSFER";
+  if(r.includes("DEPOSIT")) return "DEPOSIT";
 
-  // 9. Strip pipes and leading codes, keep clean name
+  // 12. Fallback - strip pipes and leading codes
   const first = raw.split("|")[0].trim();
   const stripped = first.replace(/^[\d\s\/]+/,"").trim();
   return (stripped.length>3 ? stripped : first).slice(0,80);
+}
+
+// Detect if transaction is intercompany
+function isIntercompany(t){
+  const d = (t.description||"").toUpperCase();
+  const c = (t.cleanDesc||"").toUpperCase();
+  return d.includes("EASYSHIP")||d.includes("GOSINCRO")||d.includes("GO SINCRO")||
+    d.includes("ENOVIE")||c.includes("INTERCOMPANY")||
+    (t.rawDesc||"").toUpperCase().includes("BOOK TRANSFER");
 }
 
 // Get bank accounts for entity
@@ -1014,6 +1074,11 @@ function renderUpload(){
         <option value="Payment Journal" ${S.filterType==="Payment Journal"?"selected":""}>Payment</option>
         <option value="Cash Receipt" ${S.filterType==="Cash Receipt"?"selected":""}>Receipt</option>
       </select>
+      <select onchange="setFilter('filterIC',this.value)">
+        <option value="all">All entries</option>
+        <option value="interco" ${S.filterIC==="interco"?"selected":""}>🔗 Intercompany only</option>
+        <option value="normal" ${S.filterIC==="normal"?"selected":""}>Normal only</option>
+      </select>
       <select onchange="setFilter('filterCcy',this.value)">
         <option value="all">All CCY</option>
         ${ccys.map(c=>`<option value="${c}" ${S.filterCcy===c?"selected":""}>${c}</option>`).join("")}
@@ -1096,7 +1161,9 @@ function renderRow(t){
     balCell=`<span style="font-size:10px;color:var(--text2)">${t.balAccountNo||"—"}</span>`;
     docTypeCell=t.documentType||"—";
     extDocCell=`<span style="font-size:10px;color:var(--text3)">${t.reference||"—"}</span>`;
-    descCell=`<span title="${t.description}" style="font-size:11px">${(t.cleanDesc||t.description||"").slice(0,40)}${(t.cleanDesc||t.description||"").length>40?"…":""}</span>`;
+    const descText=(t.cleanDesc||t.description||"").slice(0,38);
+    const icBadge=t.isIntercompany?`<span class="badge badge-purple" style="font-size:9px;margin-left:4px">IC</span>`:"";
+    descCell=`<span title="${t.description}" style="font-size:11px">${descText}${(t.cleanDesc||t.description||"").length>38?"…":""}${icBadge}</span>`;
   }
 
   let actions="";
@@ -1297,34 +1364,74 @@ function renderRules(){
       ${S.ruleMsg?`<span style="margin-left:12px;font-size:12px;color:var(--green)">${S.ruleMsg}</span>`:""}
     </div>
 
-    ${S.rules.length===0?`<p style="font-size:12px;color:var(--text3)">No rules yet.</p>`:`
-    <div class="tbl-wrap">
-      <table>
-        <thead><tr><th>#</th><th>Name</th><th>Keyword</th><th>Entity</th><th>Bank Acct</th><th>Type</th><th>Acct Type</th><th>Account No.</th><th>Bal. Type</th><th>Bal. No.</th>${canAdmin()?"<th>Del</th>":""}</tr></thead>
-        <tbody>${S.rules.map((r,i)=>{
-          const aName=getItemName(r.accountType,r.accountNo,r.entity);
-          return`<tr>
-          <td style="color:var(--text3);font-size:10px">${i+1}</td>
-          <td style="font-weight:500">${r.name}</td>
-          <td><span style="font-family:'DM Mono',monospace;background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:10px">${r.descContains}</span></td>
-          <td style="font-size:10px;color:var(--text2)">${r.entity||"All"}</td>
-          <td style="font-size:10px;color:var(--text3)">${r.entityAcct?`···${r.entityAcct.slice(-6)}`:"Any"}</td>
-          <td>${r.type||"Any"}</td>
-          <td>${r.accountType}</td>
-          <td><span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--blue)">${r.accountNo}</span>${aName?`<span style="font-size:9px;color:var(--text3);margin-left:4px">${aName.slice(0,20)}</span>`:""}</td>
-          <td>${r.balAccountType}</td>
-          <td style="font-family:'DM Mono',monospace;font-size:10px">${r.balAccountNo}</td>
-          ${canAdmin()?`<td><button onclick="deleteRule('${r.id}')" class="btn-xs btn-danger">✕</button></td>`:""}
-        </tr>`;}).join("")}</tbody>
-      </table>
-    </div>`}`;
+    ${(()=>{
+      const rf = S.ruleFilter;
+      const allEntsForRules = [...new Set(S.rules.map(r=>r.entity).filter(Boolean))];
+      const allBanksForRules = [...new Set(S.rules.map(r=>r.entityAcct).filter(Boolean))];
+      const filteredRules = S.rules.filter(r=>{
+        if(rf.entity && r.entity !== rf.entity) return false;
+        if(rf.bank && r.entityAcct !== rf.bank) return false;
+        if(rf.keyword && !(r.name||"").toLowerCase().includes(rf.keyword.toLowerCase()) &&
+           !(r.descContains||"").toLowerCase().includes(rf.keyword.toLowerCase())) return false;
+        return true;
+      });
+      if(S.rules.length===0) return `<p style="font-size:12px;color:var(--text3)">No rules yet. Add your first rule above.</p>`;
+      return `
+      <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap">
+        <select onchange="S.ruleFilter.entity=this.value;render()" style="width:200px;height:32px">
+          <option value="">All entities</option>
+          ${allEntsForRules.map(e=>`<option value="${e}" ${rf.entity===e?"selected":""}>${e}</option>`).join("")}
+        </select>
+        <select onchange="S.ruleFilter.bank=this.value;render()" style="width:160px;height:32px">
+          <option value="">All bank accounts</option>
+          ${allBanksForRules.map(b=>`<option value="${b}" ${rf.bank===b?"selected":""}>${b?`···${b.slice(-6)}`:"—"}</option>`).join("")}
+        </select>
+        <div style="position:relative;display:flex;align-items:center">
+          <input placeholder="🔍 Filter by name or keyword" value="${rf.keyword||""}"
+            oninput="S.ruleFilter.keyword=this.value;render()"
+            style="width:200px;height:32px;padding:0 28px 0 10px;border:1px solid ${rf.keyword?"var(--blue)":"var(--border)"}">
+          ${rf.keyword?`<button onclick="S.ruleFilter.keyword='';render()" style="position:absolute;right:6px;background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;padding:0">✕</button>`:""}
+        </div>
+        <span style="font-size:11px;color:var(--text3)">${filteredRules.length}/${S.rules.length} rules</span>
+        ${(rf.entity||rf.bank||rf.keyword)?`<button onclick="S.ruleFilter={entity:'',bank:'',keyword:''};render()" class="btn-sm btn-amber">Clear filters</button>`:""}
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Name</th><th>Keyword</th><th>Entity</th><th>Bank Acct</th><th>Type</th><th>Acct Type</th><th>Account No.</th><th>Bal. Type</th><th>Bal. No.</th><th>Matches</th>${canAdmin()?"<th>Del</th>":""}</tr></thead>
+          <tbody>${filteredRules.map((r,i)=>{
+            const aName=getItemName(r.accountType,r.accountNo,r.entity);
+            const matchCount=S.txns.filter(t=>{
+              if(r.entity&&r.entity!==t.entity) return false;
+              const kw=(r.descContains||"").toLowerCase();
+              return kw&&((t.description||"").toLowerCase().includes(kw)||(t.cleanDesc||"").toLowerCase().includes(kw));
+            }).length;
+            return`<tr>
+            <td style="color:var(--text3);font-size:10px">${i+1}</td>
+            <td style="font-weight:500">${r.name}</td>
+            <td><span style="font-family:'DM Mono',monospace;background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:10px">${r.descContains}</span></td>
+            <td style="font-size:10px;color:var(--text2)">${r.entity||"All"}</td>
+            <td style="font-size:10px;color:var(--text3)">${r.entityAcct?`···${r.entityAcct.slice(-6)}`:"Any"}</td>
+            <td>${r.type||"Any"}</td>
+            <td>${r.accountType}</td>
+            <td><span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--blue)">${r.accountNo}</span>${aName?`<span style="font-size:9px;color:var(--text3);margin-left:4px">${aName.slice(0,20)}</span>`:""}</td>
+            <td>${r.balAccountType}</td>
+            <td style="font-family:'DM Mono',monospace;font-size:10px">${r.balAccountNo}</td>
+            <td><span class="badge ${matchCount>0?"badge-green":"badge-grey"}">${matchCount} now</span></td>
+            ${canAdmin()?`<td><button onclick="deleteRule('${r.id}')" class="btn-xs btn-danger">✕</button></td>`:""}
+          </tr>`;}).join("")}</tbody>
+        </table>
+      </div>`;
+    })()}`;
 }
 
 // ─── TAB 2: MASTER DATA ──────────────────────────────
 function renderMaster(){
   const mt=S.masterTab;
   const allItems=mt==="vendors"?S.vendors:mt==="customers"?S.customers:S.glAccounts;
-  const filtered=S.masterFilter==="all"?allItems:allItems.filter(i=>i.entity===S.masterFilter);
+  const filtered=(S.masterFilter==="all"?allItems:allItems.filter(i=>i.entity===S.masterFilter))
+    .filter(i=>!S.masterSearch||
+      (i.no||"").toLowerCase().includes(S.masterSearch.toLowerCase())||
+      (i.name||"").toLowerCase().includes(S.masterSearch.toLowerCase()));
   const pending=mt==="vendors"?S.pendingVendors:mt==="customers"?S.pendingCustomers:S.pendingGL;
 
   return`
@@ -1400,7 +1507,14 @@ function renderMaster(){
         <option value="all">All entities</option>
         ${uniqueEntityNames().map(n=>`<option value="${n}" ${S.masterFilter===n?"selected":""}>${n}</option>`).join("")}
       </select>
+      <div style="position:relative;display:flex;align-items:center">
+        <input placeholder="🔍 Search no. or name…" value="${S.masterSearch}"
+          oninput="S.masterSearch=this.value;render()"
+          style="width:200px;height:32px;padding:0 28px 0 10px;border:1px solid ${S.masterSearch?"var(--blue)":"var(--border)"}">
+        ${S.masterSearch?`<button onclick="S.masterSearch='';render()" style="position:absolute;right:6px;background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;padding:0">✕</button>`:""}
+      </div>
       <span style="font-size:11px;color:var(--text3)">${filtered.length} records</span>
+      <button onclick="exportMasterData('${mt}')" class="btn-sm" style="margin-left:auto;background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">⬇ Export list</button>
       ${canAdmin()?`
         <button onclick="toggleSelectAllMaster(true)" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">Select all ${filtered.length}</button>
         ${S.selectedMasterItems.size>0?`
@@ -1431,6 +1545,20 @@ function renderMaster(){
       </table>
     </div>
     ${filtered.length>500?`<p style="font-size:11px;color:var(--text3);margin-top:6px">Showing 500/${filtered.length} — filter by entity to see all</p>`:""}`;
+}
+
+function exportMasterData(type){
+  const allItems=type==="vendors"?S.vendors:type==="customers"?S.customers:S.glAccounts;
+  const filtered=(S.masterFilter==="all"?allItems:allItems.filter(i=>i.entity===S.masterFilter))
+    .filter(i=>!S.masterSearch||(i.no||"").toLowerCase().includes(S.masterSearch.toLowerCase())||(i.name||"").toLowerCase().includes(S.masterSearch.toLowerCase()));
+  const h=type==="gl"?["Entity Name","GL No.","GL Account","Currency","Added By"]:["Entity","No.","Name","Currency","Added By","Approved By"];
+  const rows=[h.join(","),...filtered.map(i=>type==="gl"?
+    [`"${i.entity||""}"`,i.no||"",`"${i.name||""}"`,i.currency||"",i.addedBy||""].join(","):
+    [`"${i.entity||""}"`,i.no||"",`"${i.name||""}"`,i.currency||"",i.addedBy||"",i.approvedBy||""].join(","))];
+  const blob=new Blob([rows.join("\n")],{type:"text/csv"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+  a.download=`${type}_export_${today()}.csv`;a.click();
+  audit("EXPORT_MASTER",`${filtered.length} ${type} exported`);
 }
 
 function downloadTemplate(type){
@@ -1470,7 +1598,10 @@ function saveDailyBalance(account, date, balanceVal){
 
 function getExpectedBalance(account){
   var ob = (S.dailyBalances[account] && S.dailyBalances[account]["opening"]) ? S.dailyBalances[account]["opening"] : 0;
-  var txns = S.txns.concat(S.bookings).filter(function(t){ return t.entityAcct===account && t.status==="booked"; });
+  // Exclude voided entries from balance calculation
+  var txns = S.txns.concat(S.bookings).filter(function(t){
+    return t.entityAcct===account && t.status==="booked" && t.status!=="voided";
+  });
   var credits = txns.filter(function(t){return t.type==="Cash Receipt";}).reduce(function(s,t){return s+t.amount;},0);
   var debits  = txns.filter(function(t){return t.type==="Payment Journal";}).reduce(function(s,t){return s+t.amount;},0);
   return ob + credits - debits;
@@ -1596,10 +1727,14 @@ function renderRecon(){
     </div>`;
 }
 
-function showBalanceEntry(){
+function showBalanceEntry(filterEnt, filterCcy){
   var ents = allEntities();
+  if(filterEnt) ents = ents.filter(function(e){return e.name===filterEnt;});
+  if(filterCcy) ents = ents.filter(function(e){return e.currency===filterCcy;});
   var today2 = new Date().toISOString().slice(0,10);
   var todayFmt = new Date().toLocaleDateString("en-GB");
+  var allEntNames = [...new Set(allEntities().map(function(e){return e.name;}))];
+  var allCcys = [...new Set(allEntities().map(function(e){return e.currency;}))].sort();
   var rows = "";
   ents.forEach(function(en){
     var expected = getExpectedBalance(en.account);
@@ -1628,7 +1763,18 @@ function showBalanceEntry(){
           📥 Enter Today's Closing Balances — ${todayFmt}
           <button class="modal-close" onclick="closeModal()">✕</button>
         </div>
-        <p style="font-size:11px;color:var(--text3);margin-bottom:12px">Enter the actual closing balance from JP Morgan for each account. Press Tab to move between fields.</p>
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+          <select onchange="showBalanceEntry(this.value||null,'${filterCcy||""}')" style="height:32px;min-width:200px">
+            <option value="">All entities</option>
+            ${allEntNames.map(function(n){return`<option value="${n}" ${filterEnt===n?"selected":""}>${n}</option>`;}).join("")}
+          </select>
+          <select onchange="showBalanceEntry('${filterEnt||""}',this.value||null)" style="height:32px">
+            <option value="">All currencies</option>
+            ${allCcys.map(function(c){return`<option value="${c}" ${filterCcy===c?"selected":""}>${c}</option>`;}).join("")}
+          </select>
+          <span style="font-size:11px;color:var(--text3)">${ents.length} accounts shown</span>
+        </div>
+        <p style="font-size:11px;color:var(--text3);margin-bottom:8px">Enter actual closing balance from JP Morgan. Press Tab to move between fields.</p>
         <div style="overflow:auto;max-height:60vh;border:1px solid var(--border);border-radius:8px">
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead><tr style="background:#f8f9fb;position:sticky;top:0">
@@ -1665,8 +1811,12 @@ function updateBalanceRow(account, value, expected){
   saveDailyBalance(account, today2, amt);
 }
 
-function showOpeningBalanceEntry(){
+function showOpeningBalanceEntry(filterEnt, filterCcy){
   var ents = allEntities();
+  if(filterEnt) ents = ents.filter(function(e){return e.name===filterEnt;});
+  if(filterCcy) ents = ents.filter(function(e){return e.currency===filterCcy;});
+  var allEntNames = [...new Set(allEntities().map(function(e){return e.name;}))];
+  var allCcys = [...new Set(allEntities().map(function(e){return e.currency;}))].sort();
   var rows = "";
   ents.forEach(function(en){
     var ob = S.dailyBalances[en.account] && S.dailyBalances[en.account]["opening"] ? S.dailyBalances[en.account]["opening"] : "";
@@ -1674,7 +1824,8 @@ function showOpeningBalanceEntry(){
     rows += "<tr>";
     rows += "<td style='font-size:11px;font-weight:500;padding:8px 12px'>"+en.name+"</td>";
     rows += "<td style='font-family:DM Mono,monospace;font-size:10px;color:var(--text3);padding:8px 12px'>"+en.currency+" ···"+en.account.slice(-6)+"</td>";
-    rows += "<td style='padding:8px 12px'><input type='number' value='"+(ob||"")+"' placeholder='Opening balance' step='0.01' style='width:160px;font-size:12px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;height:32px' onchange='saveDailyBalance(&#39;"+en.account+"&#39;,&#39;opening&#39;,this.value)'></td>";
+    rows += "<td style='padding:8px 12px'><input type='number' value='"+(ob||"")+"' placeholder='Enter opening balance' step='0.01' style='width:160px;font-size:12px;padding:6px 10px;border:1px solid "+(ob?"var(--green)":"var(--border)")+";border-radius:6px;height:32px' onchange='saveDailyBalance(&#39;"+en.account+"&#39;,&#39;opening&#39;,this.value)'></td>";
+    rows += "<td style='font-size:10px;padding:8px 12px'>"+(ob?`<span style='color:var(--green);font-weight:600'>✓ ${ob.toLocaleString()}</span>`:"<span style='color:var(--amber)'>⚠ Not set</span>")+"</td>";
     rows += "<td style='font-size:10px;color:var(--text3);padding:8px 12px'>"+(obBy||"—")+"</td>";
     rows += "</tr>";
   });
@@ -1686,7 +1837,18 @@ function showOpeningBalanceEntry(){
           🗓 Set Opening Balances
           <button class="modal-close" onclick="closeModal()">✕</button>
         </div>
-        <p style="font-size:11px;color:var(--text3);margin-bottom:12px">Enter the opening balance for each account at the start of the month. Set once per month only.</p>
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+          <select onchange="showOpeningBalanceEntry(this.value||null,'${filterCcy||""}')" style="height:32px;min-width:200px">
+            <option value="">All entities</option>
+            ${allEntNames.map(function(n){return`<option value="${n}" ${filterEnt===n?"selected":""}>${n}</option>`;}).join("")}
+          </select>
+          <select onchange="showOpeningBalanceEntry('${filterEnt||""}',this.value||null)" style="height:32px">
+            <option value="">All currencies</option>
+            ${allCcys.map(function(c){return`<option value="${c}" ${filterCcy===c?"selected":""}>${c}</option>`;}).join("")}
+          </select>
+          <span style="font-size:11px;color:var(--text3)">${ents.length} accounts shown</span>
+        </div>
+        <p style="font-size:11px;color:var(--text3);margin-bottom:8px">Set once per month. Shows ✓ if already set.</p>
         <div style="overflow:auto;max-height:60vh;border:1px solid var(--border);border-radius:8px">
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead><tr style="background:#f8f9fb;position:sticky;top:0">
@@ -1777,6 +1939,63 @@ function openReconDrawer(reconKey){
 function closeDrawer(){
   document.getElementById("drawer-container").innerHTML="";
   S.reconEntity=null;
+}
+
+function drawerSelectAll(checked){
+  var chks=document.querySelectorAll(".drawer-chk");
+  chks.forEach(function(c){c.checked=checked!==undefined?checked:true;});
+  drawerChkChange();
+}
+
+function drawerClearSel(){
+  document.querySelectorAll(".drawer-chk").forEach(function(c){c.checked=false;});
+  drawerChkChange();
+}
+
+function drawerChkChange(){
+  var chks=[...document.querySelectorAll(".drawer-chk:checked")];
+  var count=chks.length;
+  var countEl=document.getElementById("drawer-sel-count");
+  var voidBtn=document.getElementById("drawer-void-btn");
+  var restoreBtn=document.getElementById("drawer-restore-btn");
+  var clearBtn=document.getElementById("drawer-clear-btn");
+  if(countEl) countEl.style.display=count>0?"inline-flex":"none";
+  if(countEl) countEl.textContent=count+" selected";
+  if(voidBtn) voidBtn.style.display=count>0?"inline-block":"none";
+  if(restoreBtn) restoreBtn.style.display=count>0?"inline-block":"none";
+  if(clearBtn) clearBtn.style.display=count>0?"inline-block":"none";
+}
+
+function drawerVoidSelected(entityName, entityAcct){
+  var ids=[...document.querySelectorAll(".drawer-chk:checked")].map(function(c){return c.dataset.id;});
+  if(!ids.length) return;
+  if(!confirm("Void "+ids.length+" selected entries?\n\nVoided entries:\n• Will NOT count in balance calculations\n• Will NOT export to D365\n• Stay visible in history\n• Can be restored")) return;
+  S.txns=S.txns.map(function(t){
+    return ids.includes(t.id)?Object.assign({},t,{status:"voided",rowColor:"grey",voidedBy:S.user.name,voidedAt:new Date().toLocaleString()}):t;
+  });
+  S.bookings=S.bookings.map(function(t){
+    return ids.includes(t.id)?Object.assign({},t,{status:"voided",voidedBy:S.user.name}):t;
+  });
+  audit("BULK_VOID",ids.length+" entries voided in "+entityName+" ···"+entityAcct.slice(-6));
+  addAlert("info",S.user.name+" voided "+ids.length+" entries in "+entityName);
+  saveSession();
+  ls("brp3_bookings",S.bookings);
+  // Refresh drawer
+  openReconDrawer(entityName+"|"+entityAcct);
+}
+
+function drawerRestoreSelected(entityName, entityAcct){
+  var ids=[...document.querySelectorAll(".drawer-chk:checked")].map(function(c){return c.dataset.id;});
+  if(!ids.length) return;
+  if(!confirm("Restore "+ids.length+" voided entries back to Pending?")) return;
+  S.txns=S.txns.map(function(t){
+    return ids.includes(t.id)?Object.assign({},t,{status:"pending",rowColor:"red",voidedBy:null,locked:false}):t;
+  });
+  S.bookings=S.bookings.filter(function(t){return !ids.includes(t.id);});
+  audit("BULK_RESTORE",ids.length+" entries restored in "+entityName);
+  saveSession();
+  ls("brp3_bookings",S.bookings);
+  openReconDrawer(entityName+"|"+entityAcct);
 }
 
 // ─── TAB 4: TEAM DASHBOARD ───────────────────────────
@@ -1874,13 +2093,32 @@ function renderBalanceKPI(){
 
 function renderDashboard(){
   const ents=allEntities();
-  const bookedTxns=S.txns.filter(t=>t.status==="booked");
+  // Date filter
+  const dashDate = S.dashDate||"all";
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0,10);
+  const weekAgo = new Date(now-7*86400000).toISOString().slice(0,10);
+  const monthStr = `${String(now.getMonth()+1).padStart(2,"0")}/${now.getFullYear()}`;
+
+  function txnInRange(t){
+    if(dashDate==="all") return true;
+    const d=(t.date||"").split("/"); // DD/MM/YYYY
+    if(d.length!==3) return false;
+    const iso=`${d[2]}-${d[1]}-${d[0]}`;
+    if(dashDate==="today") return iso===todayStr;
+    if(dashDate==="week") return iso>=weekAgo;
+    if(dashDate==="month") return t.date&&t.date.endsWith(monthStr);
+    return true;
+  }
+
+  const allTxns = S.txns.filter(txnInRange);
+  const bookedTxns=allTxns.filter(t=>t.status==="booked");
   const byUser={};
   bookedTxns.forEach(t=>{if(t.bookedBy){byUser[t.bookedBy]=(byUser[t.bookedBy]||[]);byUser[t.bookedBy].push(t);}});
 
-  const totalCredits=S.txns.filter(t=>t.type==="Cash Receipt").reduce((s,t)=>s+t.amount,0);
-  const totalDebits=S.txns.filter(t=>t.type==="Payment Journal").reduce((s,t)=>s+t.amount,0);
-  const totalPending=S.txns.filter(t=>t.status==="pending"||t.status==="flagged").length;
+  const totalCredits=allTxns.filter(t=>t.type==="Cash Receipt").reduce((s,t)=>s+t.amount,0);
+  const totalDebits=allTxns.filter(t=>t.type==="Payment Journal").reduce((s,t)=>s+t.amount,0);
+  const totalPending=allTxns.filter(t=>t.status==="pending"||t.status==="flagged").length;
 
   return`
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
@@ -1888,7 +2126,13 @@ function renderDashboard(){
         <h2 style="font-size:15px;font-weight:600">Team Dashboard</h2>
         <p style="font-size:11px;color:var(--text3);margin-top:2px">${new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</p>
       </div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select onchange="S.dashDate=this.value;render()" style="height:32px">
+          <option value="all" ${S.dashDate==="all"||!S.dashDate?"selected":""}>All time</option>
+          <option value="today" ${S.dashDate==="today"?"selected":""}>Today</option>
+          <option value="week" ${S.dashDate==="week"?"selected":""}>This week</option>
+          <option value="month" ${S.dashDate==="month"?"selected":""}>This month</option>
+        </select>
         <button onclick="setTab(0)" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">→ Upload & Review</button>
         <button onclick="setTab(3)" class="btn-sm" style="background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">→ Reconciliation</button>
       </div>
@@ -1977,7 +2221,42 @@ function renderDashboard(){
     </div>
 
 
-        <h3 style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--text3);margin:16px 0 8px">Upload Sessions</h3>
+        <h3 style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--text3);margin:16px 0 8px">🎯 Entity Risk Score</h3>
+    <div class="tbl-wrap" style="margin-bottom:16px">
+      <table>
+        <thead><tr><th>Entity</th><th>Account</th><th>Unmapped %</th><th>Duplicates</th><th>Variance Days</th><th>Risk</th></tr></thead>
+        <tbody>${(()=>{
+          const dups=detectDuplicatePayments();
+          const days=getWorkdays();
+          return ents.map(en=>{
+            const entTxns=allTxns.filter(t=>t.entity===en.name&&t.entityAcct===en.account);
+            if(entTxns.length===0) return "";
+            const unmapped=entTxns.filter(t=>!t.accountNo&&t.status!=="voided").length;
+            const unmappedPct=Math.round(unmapped/Math.max(entTxns.length,1)*100);
+            const dupCount=dups.filter(d=>d.t1.entity===en.name).length;
+            const varianceDays=days.filter(day=>{
+              const actual=getActualBalance(en.account,day);
+              if(actual===null) return false;
+              return Math.abs(actual-getExpectedBalance(en.account))>=1;
+            }).length;
+            // Risk score: 0-100
+            const risk=Math.min(100,unmappedPct*0.5+dupCount*10+varianceDays*15);
+            const riskLabel=risk<20?"🟢 Low":risk<50?"🟡 Medium":"🔴 High";
+            const riskColor=risk<20?"var(--green)":risk<50?"#f59e0b":"var(--red)";
+            return`<tr>
+              <td style="font-size:11px;font-weight:500">${en.name}</td>
+              <td style="font-family:DM Mono,monospace;font-size:10px;color:var(--text3)">${en.currency} ···${en.account.slice(-6)}</td>
+              <td><span style="font-weight:600;color:${unmappedPct>30?"var(--red)":unmappedPct>10?"#f59e0b":"var(--green)"}">${unmappedPct}%</span> <span style="font-size:10px;color:var(--text3)">(${unmapped}/${entTxns.length})</span></td>
+              <td style="color:${dupCount>0?"var(--red)":"var(--text3)"};font-weight:${dupCount>0?600:400}">${dupCount>0?`⚠ ${dupCount}`:"—"}</td>
+              <td style="color:${varianceDays>0?"var(--red)":"var(--text3)"}">${varianceDays>0?varianceDays+" days":"—"}</td>
+              <td><span style="font-weight:700;color:${riskColor}">${riskLabel}</span></td>
+            </tr>`;
+          }).join("");
+        })()}</tbody>
+      </table>
+    </div>
+
+    <h3 style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--text3);margin:16px 0 8px">Upload Sessions</h3>
     ${S.sessions.length===0?`<p style="font-size:12px;color:var(--text3)">No uploads yet.</p>`:`
     <div class="tbl-wrap">
       <table>
@@ -2031,36 +2310,83 @@ function renderMonthly(){
         <div class="metric"><div class="metric-label">Entities Active</div><div class="metric-val">${entCount}</div></div>
       </div>`;
     })()}
-    ${rows.length===0?`<p style="font-size:12px;color:var(--text3)">No data yet — upload a bank CSV first.</p>`:`
-    <div class="tbl-wrap">
-      <table class="month-table">
-        <thead><tr><th>Entity</th><th>Month</th><th>Credits</th><th>Debits</th><th>Net</th><th>Transactions</th><th>Booked</th></tr></thead>
-        <tbody>${rows.map(r=>{
-          const net=r.credits-r.debits;
-          return`<tr>
-          <td style="font-size:11px;font-weight:500">${r.entity}</td>
-          <td style="font-family:'DM Mono',monospace;font-size:10px">${r.month}</td>
-          <td style="color:var(--green);font-weight:500;font-family:'DM Mono',monospace">${fmtAmt(r.credits)}</td>
-          <td style="color:var(--red);font-weight:500;font-family:'DM Mono',monospace">${fmtAmt(r.debits)}</td>
-          <td style="font-weight:600;font-family:'DM Mono',monospace;color:${net>=0?"var(--green)":"var(--red)"}">${fmtAmt(net)}</td>
-          <td style="text-align:center">${r.count}</td>
-          <td style="text-align:center"><span class="badge ${r.booked===r.count?"badge-green":"badge-amber"}">${r.booked}/${r.count}</span></td>
-        </tr>`;}).join("")}</tbody>
-      </table>
-    </div>`}`;
+    ${(()=>{
+      if(rows.length===0) return `<p style="font-size:12px;color:var(--text3)">No data yet — upload a bank CSV first.</p>`;
+      // Entity filter
+      const entOpts=[...new Set(rows.map(r=>r.entity))];
+      const mef=S.monthlyEntFilter||"all";
+      const visRows=mef==="all"?rows:rows.filter(r=>r.entity===mef);
+      return `
+      <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
+        <select onchange="S.monthlyEntFilter=this.value;render()" style="height:32px;min-width:220px">
+          <option value="all">All entities</option>
+          ${entOpts.map(e=>`<option value="${e}" ${mef===e?"selected":""}>${e}</option>`).join("")}
+        </select>
+        <span style="font-size:11px;color:var(--text3)">${visRows.length} rows</span>
+      </div>
+      <div class="tbl-wrap">
+        <table class="month-table">
+          <thead><tr><th>Entity</th><th>Month</th><th>Credits</th><th>Debits</th><th>Net Flow</th><th>Running Balance</th><th>Transactions</th><th>Booked</th></tr></thead>
+          <tbody>${(()=>{
+            // Running balance per entity
+            const runBal={};
+            return visRows.map(r=>{
+              const net=r.credits-r.debits;
+              const ob=S.dailyBalances[r.entityAcct]&&S.dailyBalances[r.entityAcct]["opening"]?S.dailyBalances[r.entityAcct]["opening"]:0;
+              if(!runBal[r.entity]) runBal[r.entity]=ob;
+              runBal[r.entity]+=net;
+              const bal=runBal[r.entity];
+              return`<tr>
+                <td style="font-size:11px;font-weight:500">${r.entity}</td>
+                <td style="font-family:'DM Mono',monospace;font-size:10px">${r.month}</td>
+                <td style="color:var(--green);font-weight:500;font-family:'DM Mono',monospace">${fmtAmt(r.credits)}</td>
+                <td style="color:var(--red);font-weight:500;font-family:'DM Mono',monospace">${fmtAmt(r.debits)}</td>
+                <td style="font-weight:600;font-family:'DM Mono',monospace;color:${net>=0?"var(--green)":"var(--red)"}">${fmtAmt(net)}</td>
+                <td style="font-family:'DM Mono',monospace;font-weight:600;font-size:11px">${fmtAmt(bal)}</td>
+                <td style="text-align:center">${r.count}</td>
+                <td style="text-align:center"><span class="badge ${r.booked===r.count?"badge-green":"badge-amber"}">${r.booked}/${r.count}</span></td>
+              </tr>`;}).join("");
+          })()}</tbody>
+        </table>
+      </div>`;
+    })()}`;
 }
 
 // ─── TAB 6: ALERT HISTORY ────────────────────────────
 function renderAlerts(){
   return`
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div><h2 style="font-size:15px;font-weight:600">Alert History</h2></div>
-      <div style="display:flex;gap:8px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div><h2 style="font-size:15px;font-weight:600">Alert History</h2>
+      <p style="font-size:11px;color:var(--text3);margin-top:2px">${S.alerts.length} alerts · ${S.alerts.filter(a=>!a.read).length} unread</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button onclick="markAllRead()" class="btn-sm">Mark all read</button>
-        <button onclick="exportAlertExcel(S.alerts)" class="btn-sm" style="background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">⬇ Export to Excel</button>
+        <button onclick="exportAlertExcel(S.alerts)" class="btn-sm" style="background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">⬇ Detailed Export</button>
         <button onclick="doExport('diagnostic')" class="btn-sm btn-primary">⬇ Diagnostic</button>
+        ${canAdmin()?`<button onclick="clearOldAlerts()" class="btn-sm btn-danger">🗑 Clear old alerts</button>`:""}
       </div>
     </div>
+    ${(()=>{
+      const dups=detectDuplicatePayments();
+      const missing=S.txns.filter(t=>!t.accountNo&&t.status!=="voided"&&t.status!=="rejected").length;
+      if(dups.length===0&&missing===0) return "";
+      return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-bottom:12px">
+        ${dups.length>0?`<div class="card" style="border-left:4px solid var(--red);padding:10px 14px">
+          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Duplicate Payments</div>
+          <div style="font-size:24px;font-weight:700;color:var(--red)">${dups.length}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">same vendor · same amount · within 7 days</div>
+          <div style="margin-top:8px;max-height:80px;overflow-y:auto">
+            ${dups.slice(0,5).map(d=>`<div style="font-size:10px;color:var(--text2);border-top:1px solid var(--border);padding:3px 0">${d.t1.entity.slice(0,20)} · ${d.t1.accountNo} · ${fmtAmt(d.t1.amount)} · ${d.diff}d</div>`).join("")}
+          </div>
+        </div>`:""}
+        ${missing>0?`<div class="card" style="border-left:4px solid #f59e0b;padding:10px 14px">
+          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Unmapped Entries</div>
+          <div style="font-size:24px;font-weight:700;color:#f59e0b">${missing}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">need Account No. before export</div>
+          <button onclick="setTab(0);clickMetric('noacct')" class="btn-sm btn-amber" style="margin-top:8px;width:100%">View in Upload tab →</button>
+        </div>`:""}
+      </div>`;
+    })()}
     ${S.auditLog.length>0&&canAdmin()?`
     <div class="card" style="margin-bottom:12px">
       <div class="section-title">Audit Trail <span style="font-size:10px;font-weight:400;text-transform:none;color:var(--text3)">(admin only)</span></div>
@@ -2247,6 +2573,8 @@ async function handleFile(file){
   if(!file) return;
   const text=await file.text();
   const{parsed,skipped,unmatched}=parseJPM(text);
+  // Add default rules on first upload if not already there
+  addDefaultRules();
   // Check for unmapped carry-forward
   const prevUnmapped=S.txns.filter(t=>!t.accountNo&&t.status==="pending");
   if(prevUnmapped.length>0){
@@ -2316,6 +2644,23 @@ function clearAndReupload(){
   },300);
 }
 
+function addDefaultRules(){
+  // Only add if not already present
+  const exists=function(kw){return S.rules.some(function(r){return (r.descContains||"").toLowerCase()===kw.toLowerCase();});};
+  var added=false;
+  var defaultRules=[
+    {name:"Book Transfer (Intercompany)",descContains:"BOOK TRANSFER",type:"",accountType:"IC Partner",accountNo:"",balAccountType:"Bank Account",balAccountNo:"",entity:"",entityAcct:""},
+    {name:"Stripe Payments",descContains:"STRIPE",type:"Cash Receipt",accountType:"Customer",accountNo:"",balAccountType:"Bank Account",balAccountNo:"",entity:"",entityAcct:""},
+  ];
+  defaultRules.forEach(function(r){
+    if(!exists(r.descContains)){
+      S.rules.push(Object.assign({id:"rule-default-"+Date.now()+Math.random(),isDefault:true},r));
+      added=true;
+    }
+  });
+  if(added){ls("brp3_rules",S.rules);}
+}
+
 function loadCarryForward(){
   S.txns=[...S.unmappedCarry,...S.txns];
   S.unmappedCarry=[];
@@ -2346,6 +2691,13 @@ function startEdit(id){
 function cancelEdit(){S.editId=null;render();}
 function setMasterTab(t){S.masterTab=t;render();}
 function markAllRead(){S.alerts=S.alerts.map(a=>({...a,read:true}));ls("brp3_alerts",S.alerts);render();}
+function clearOldAlerts(){
+  if(!confirm("Clear all read alerts? Unread alerts will be kept.")) return;
+  S.alerts=S.alerts.filter(a=>!a.read);
+  ls("brp3_alerts",S.alerts);
+  audit("CLEAR_ALERTS","Cleared read alerts");
+  render();
+}
 function toggleExport(){S.exportOpen=!S.exportOpen;render();}
 function toggleNewEntity(){S.showNewEntity=!S.showNewEntity;render();}
 
@@ -2638,7 +2990,10 @@ function toggleMasterItem(id, checked){
 function toggleSelectAllMaster(checked){
   const mt=S.masterTab;
   const allItems=mt==="vendors"?S.vendors:mt==="customers"?S.customers:S.glAccounts;
-  const filtered=S.masterFilter==="all"?allItems:allItems.filter(i=>i.entity===S.masterFilter);
+  const filtered=(S.masterFilter==="all"?allItems:allItems.filter(i=>i.entity===S.masterFilter))
+    .filter(i=>!S.masterSearch||
+      (i.no||"").toLowerCase().includes(S.masterSearch.toLowerCase())||
+      (i.name||"").toLowerCase().includes(S.masterSearch.toLowerCase()));
   if(checked) filtered.forEach(i=>S.selectedMasterItems.add(i.id));
   else S.selectedMasterItems=new Set();
   render();
@@ -2659,7 +3014,10 @@ function deleteSelectedMaster(type){
 
 function deleteAllMaster(type){
   const allItems=type==="vendors"?S.vendors:type==="customers"?S.customers:S.glAccounts;
-  const filtered=S.masterFilter==="all"?allItems:allItems.filter(i=>i.entity===S.masterFilter);
+  const filtered=(S.masterFilter==="all"?allItems:allItems.filter(i=>i.entity===S.masterFilter))
+    .filter(i=>!S.masterSearch||
+      (i.no||"").toLowerCase().includes(S.masterSearch.toLowerCase())||
+      (i.name||"").toLowerCase().includes(S.masterSearch.toLowerCase()));
   const label=S.masterFilter==="all"?"ALL "+type:"all "+type+" for "+S.masterFilter;
   if(!confirm("Delete "+label+"? ("+filtered.length+" records)\n\nThis cannot be undone. Re-import your CSV after.")) return;
   if(S.masterFilter==="all"){
