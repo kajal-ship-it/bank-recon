@@ -259,13 +259,14 @@ const SP_URL = "https://easyship1.sharepoint.com/sites/FinanceAccounting";
 const SESSION_HOURS = 8;
 
 // ─── USERS (managed by admin) ───────────────────────
-let USERS = [
+const DEFAULT_USERS = [
   {id:"u1", username:"kajal",   password:"Easyship@123", name:"Kajal",   role:"admin"},
   {id:"u2", username:"varun",   password:"Easyship@123", name:"Varun",   role:"user"},
   {id:"u3", username:"aakriti", password:"Easyship@123", name:"Aakriti", role:"user"},
   {id:"u4", username:"marta",   password:"Easyship@123", name:"Marta",   role:"admin"},
   {id:"u5", username:"guest",   password:"Easyship@123", name:"Guest",   role:"user"},
 ];
+let USERS = DEFAULT_USERS.map(u=>({...u}));
 
 // ─── ENTITIES ────────────────────────────────────────
 const ENTITIES = [
@@ -393,10 +394,11 @@ function saveSession(){
 // AUTH
 // ═══════════════════════════════════════════════════
 function doLogin(){
-  const u=document.getElementById("lu").value.trim().toLowerCase();
-  const p=document.getElementById("lp").value;
+  const u=(document.getElementById("lu").value||"").trim().toLowerCase();
+  const p=document.getElementById("lp").value||"";
+  if(!u||!p){document.getElementById("lerr").textContent="Please enter username and password.";return;}
   const user=USERS.find(x=>x.username===u&&x.password===p);
-  if(!user){document.getElementById("lerr").textContent="Invalid username or password.";return;}
+  if(!user){document.getElementById("lerr").textContent="Invalid username or password. Try: kajal / Easyship@123";return;}
   // Check session expiry
   const sess={user,loginTime:Date.now()};
   ls("brp3_session",sess);
@@ -2112,7 +2114,10 @@ async function initSP(){
 // INIT
 // ═══════════════════════════════════════════════════
 window.onload=()=>{
-  USERS=ll("brp3_users",USERS);
+  // Load saved users but always merge with defaults so new default users appear
+  const saved=ll("brp3_users",null);
+  if(saved&&Array.isArray(saved)&&saved.length>0) USERS=saved;
+  else USERS=DEFAULT_USERS.map(u=>({...u}));
   // Check for existing session
   if(checkSession()){
     document.getElementById("login-screen").style.display="none";
