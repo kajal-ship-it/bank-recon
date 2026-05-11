@@ -347,7 +347,7 @@ let S = {
   filterCcy:"all", filterColor:"all",
   selectedTxns: new Set(),
   // ui
-  editId:null, exportOpen:false, masterTab:"vendors",
+  editId:null, editOriginal:null, exportOpen:false, masterTab:"vendors",
   newMaster:{entity:"",no:"",name:"",currency:""},
   masterMsg:"", masterFilter:"all", selectedMasterItems:new Set(),
   newRule:{name:"",descContains:"",entity:"",entityAcct:"",type:"",
@@ -501,15 +501,55 @@ function findEntity(acct){
 // Smart description cleaner — extract meaningful vendor name
 function cleanDesc(raw){
   if(!raw) return "";
-  // Try to extract ORIG CO NAME or BENEFICIARY
-  const origCo=raw.match(/ORIG CO NAME=([^,|]+)/i);
-  if(origCo) return origCo[1].trim();
-  const bene=raw.match(/BENEFICIARY=([^|]+)/i);
-  if(bene) return bene[1].trim().slice(0,60);
-  const bo=raw.match(/B\/O CUSTOMER=[^|]+\|([^|]+)/i);
-  if(bo) return bo[1].trim().slice(0,60);
-  // Remove technical parts
-  return raw.replace(/\|.*$/,"").trim().slice(0,80);
+  const r = raw.toUpperCase();
+
+  // 1. ORIG CO NAME= (ACH — most reliable)
+  const m1 = raw.match(/ORIG CO NAME=([^,|]+)/i);
+  if(m1) return m1[1].trim();
+
+  // 2. B/O CUSTOMER= — search full string including across remark pipes
+  const m2 = raw.match(/B\/O CUSTOMER=([^\r\n]+?)(?:\s*\|)/i);
+  if(m2 && m2[1].trim().length>1) return m2[1].trim().slice(0,60);
+  // Also match B/O CUSTOMER= at end of string
+  const m2b = raw.match(/B\/O CUSTOMER=([^\r\n|]+)$/i);
+  if(m2b && m2b[1].trim().length>1) return m2b[1].trim().slice(0,60);
+
+  // 3. BENEFICIARY= — strip leading account numbers
+  const m3 = raw.match(/BENEFICIARY=([^|]+)/i);
+  if(m3){const b=m3[1].trim().replace(/^\d+\s+/,"");if(b.length>2) return b.slice(0,60);}
+
+  // 4. YOUR REF= with recognisable name prefix e.g. STRIPE_UQmoLp
+  const m4 = raw.match(/YOUR REF=([A-Za-z][A-Za-z0-9_-]+)/i);
+  if(m4){const v=m4[1].split(/[_-]/)[0].toUpperCase();if(v.length>2&&!/^\d+$/.test(v)) return v;}
+
+  // 5. STRIPE anywhere
+  if(r.includes("STRIPE")) return "STRIPE";
+
+  // 6. Number-prefixed name e.g. "71842658 MY FLYING BOX SAS"
+  const m6 = raw.match(/^\d{6,}\s+([A-Za-z][\w\s&.,\'"-]{3,})/);
+  if(m6) return m6[1].trim().slice(0,60);
+
+  // 7. IBAN-prefixed name e.g. "GB37BOFA300... UNITED PARCEL"
+  const m7 = raw.match(/^[A-Z]{2}\d{2}[A-Z0-9]{4,}\s+([A-Za-z][\w\s&.,\'"-]{3,})/);
+  if(m7) return m7[1].trim().slice(0,60);
+
+  // 8. Common JP Morgan transaction types
+  if(r.includes("OUTGOING MONEY XFR")) return "OUTGOING MONEY XFR";
+  if(r.includes("INCOMING MONEY XFR")) return "INCOMING MONEY XFR";
+  if(r.includes("OUTGOING ACH PAYMENT")) return "OUTGOING ACH PAYMENT";
+  if(r.includes("ACH CREDIT RECEIVED")) return "ACH CREDIT RECEIVED";
+  if(r.includes("INCOMING ACH DEBIT")) return "INCOMING ACH DEBIT";
+  if(r.includes("EFT DEBIT")) return "EFT DEBIT";
+  if(r.includes("EFT CREDIT")) return "EFT CREDIT";
+  if(r.includes("PAY METHOD=INCOMING")||r.includes("INCOMING DEBIT")) return "INCOMING PAYMENT";
+  if(r.includes("PAY METHOD=OUTGOING")||r.includes("OUTGOING DEBIT")) return "OUTGOING PAYMENT";
+  if(r.includes("BOOK TRANSFER")) return "BOOK TRANSFER";
+  if(r.includes("WIRE TRANSFER")) return "WIRE TRANSFER";
+
+  // 9. Strip pipes and leading codes, keep clean name
+  const first = raw.split("|")[0].trim();
+  const stripped = first.replace(/^[\d\s\/]+/,"").trim();
+  return (stripped.length>3 ? stripped : first).slice(0,80);
 }
 
 // Get bank accounts for entity
@@ -668,7 +708,14 @@ function applyRules(txns){
       if(r.entity&&r.entity!==t.entity) continue;
       if(r.entityAcct&&r.entityAcct!==t.entityAcct) continue;
       let score=0;
-      if(r.descContains&&t.description.toLowerCase().includes(r.descContains.toLowerCase())) score+=60;
+      if(r.descContains){
+        var kw2=r.descContains.toLowerCase().trim();
+        var dLow=(t.description||"").toLowerCase();
+        var rLow=(t.rawDesc||"").toLowerCase();
+        var cLow=(t.cleanDesc||"").toLowerCase();
+        function kwM(h,n){if(!h||!n)return false;if(h===n)return true;return h.indexOf(n)>=0&&(h===n||h.startsWith(n+" ")||h.startsWith(n+"|")||h.endsWith(" "+n)||h.endsWith("|"+n)||h.indexOf(" "+n+" ")>=0||h.indexOf("|"+n)>=0||(n.length>8&&h.indexOf(n)>=0));}
+        if(kwM(dLow,kw2)||kwM(rLow,kw2)||kwM(cLow,kw2)) score+=60;
+      }
       if(r.type&&r.type===t.type) score+=20;
       if(score>bestScore){bestScore=score;best=r;}
     }
@@ -880,6 +927,18 @@ function renderUpload(){
 
   if(S.unmatched.length>0){
     html+=`<div class="alert alert-warn"><span>⚠</span><div><strong>Unmatched accounts:</strong> ${S.unmatched.map(u=>`${u.acct}`).join(", ")}</div></div>`;
+  }
+
+  if(S.vendors.length===0&&S.glAccounts.length===0){
+    html+=`<div class="alert alert-warn"><span>⚠</span><div>
+      <strong>No vendor or GL data loaded</strong> — Account No. dropdowns will be empty.
+      <button onclick="setTab(2)" class="btn-sm btn-amber" style="margin-left:8px">→ Go to Master Data to import</button>
+    </div></div>`;
+  } else if(S.vendors.length>0){
+    // Show vendor count as reassurance
+    html+=`<div class="alert alert-ok" style="padding:6px 14px"><span>✅</span><div style="font-size:11px">
+      ${S.vendors.length} vendors · ${S.glAccounts.length} GL accounts · ${S.customers.length} customers loaded — dropdowns ready
+    </div></div>`;
   }
 
   if(S.txns.length===0) return html;
@@ -2374,10 +2433,10 @@ async function saveAndLearn(id){
     if(tx.id===id) return tx; // already handled above
     if(tx.locked||tx.status==="booked"||tx.status==="rejected"||tx.status==="voided") return tx;
     if(rule.entity&&rule.entity!==tx.entity) return tx;
-    var keyword=rule.descContains.toLowerCase();
-    var match=(tx.description||"").toLowerCase().indexOf(keyword)>=0||
-              (tx.rawDesc||"").toLowerCase().indexOf(keyword)>=0||
-              (tx.cleanDesc||"").toLowerCase().indexOf(keyword)>=0;
+    var kw3=rule.descContains.toLowerCase().trim();
+    function kwM3(h,n){if(!h||!n)return false;if(h===n)return true;return h.indexOf(n)>=0&&(h===n||h.startsWith(n+" ")||h.startsWith(n+"|")||h.endsWith(" "+n)||h.endsWith("|"+n)||h.indexOf(" "+n+" ")>=0||h.indexOf("|"+n)>=0||(n.length>8&&h.indexOf(n)>=0));}
+    var d3=(tx.description||"").toLowerCase(),r3=(tx.rawDesc||"").toLowerCase(),c3=(tx.cleanDesc||"").toLowerCase();
+    var match=kwM3(d3,kw3)||kwM3(r3,kw3)||kwM3(c3,kw3);
     if(match){
       reapplied2++;
       return Object.assign({},tx,{accountType:rule.accountType,accountNo:rule.accountNo,
@@ -2412,11 +2471,27 @@ async function saveRule(){
     // Skip if rule is type-specific and doesn't match
     if(rule.type&&rule.type!==t.type) return t;
     // Check keyword against description, rawDesc AND cleanDesc
-    var keyword=rule.descContains.toLowerCase();
-    var descMatch=(t.description||"").toLowerCase().indexOf(keyword)>=0;
-    var rawMatch=(t.rawDesc||"").toLowerCase().indexOf(keyword)>=0;
-    var cleanMatch=(t.cleanDesc||"").toLowerCase().indexOf(keyword)>=0;
-    if(keyword&&(descMatch||rawMatch||cleanMatch)){
+    // Strict match: full word/phrase match, not loose substring
+    var keyword=rule.descContains.toLowerCase().trim();
+    var desc=(t.description||"").toLowerCase();
+    var raw=(t.rawDesc||"").toLowerCase();
+    var clean=(t.cleanDesc||"").toLowerCase();
+    function kwMatch(h,n){
+      if(!h||!n) return false;
+      if(h===n) return true;
+      // Check as whole word: surrounded by spaces, start, end, or | separator
+      return h.indexOf(n)>=0 && (
+        h===n ||
+        h.startsWith(n+" ")||h.startsWith(n+"|")||
+        h.endsWith(" "+n)||h.endsWith("|"+n)||
+        h.indexOf(" "+n+" ")>=0||h.indexOf("|"+n+"|")>=0||
+        h.indexOf(" "+n+"|")>=0||h.indexOf("|"+n+" ")>=0
+      );
+    }
+    if(keyword&&(kwMatch(desc,keyword)||kwMatch(raw,keyword)||kwMatch(clean,keyword)||
+      // Also allow if keyword is long enough (>8 chars) to be specific
+      (keyword.length>8&&(desc.indexOf(keyword)>=0||raw.indexOf(keyword)>=0||clean.indexOf(keyword)>=0))
+    )){
       reapplied++;
       return Object.assign({},t,{
         accountType:rule.accountType, accountNo:rule.accountNo,
