@@ -112,6 +112,7 @@ tr:last-child td{border-bottom:none}
 .row-amber{background:#fffdf0!important;border-left:3px solid #f59e0b}
 .row-red{background:#fff8f8!important;border-left:3px solid #f87171}
 .row-grey{opacity:.5}
+.row-voided{background:#f8f8f8!important;border-left:3px solid #d1d5db;text-decoration:line-through;opacity:.5}
 tr.selected-row td{background:#eff4ff!important;border-left:3px solid var(--blue)}
 
 /* METRICS */
@@ -382,6 +383,7 @@ function loadState(){
   S.extraEntities    = ll("brp3_entities",[]);
   S.auditLog         = ll("brp3_audit",[]);
   S.unmappedCarry    = ll("brp3_carry",[]);
+  S.dailyBalances    = ll("brp3_balances",{});
   USERS              = ll("brp3_users", USERS);
 }
 
@@ -614,7 +616,7 @@ function parseJPM(text){
     const debit=parseAmount(row["Debit Amount"]||row["debit amount"]||"");
     if(credit===0&&debit===0){skipped.push({desc,acct,date,reason:"Zero amount"});return;}
 
-    const ref=(row["Customer Reference"]||row["Bank Reference"]||row["customer reference"]||row["bank reference"]||"").trim();
+    const ref=(row["Bank Reference"]||row["bank reference"]||row["Customer Reference"]||row["customer reference"]||"").trim();
     const remarks=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
       .map(n=>row[`Remarks ${n}`]||row[`remarks ${n}`]||"").filter(Boolean).join(" | ");
     const fullDesc=remarks?`${desc} | ${remarks}`:desc;
@@ -637,7 +639,7 @@ function parseJPM(text){
       status:"pending", rowColor:"red",
       accountType:"", accountNo:"",
       balAccountType:"Bank Account", balAccountNo:ent.bankName,
-      documentType:type==="Payment Journal"?"Payment":"Refund",
+      documentType:"Payment",
       confidence:0, matchedRule:null, memSuggestion:null,
       isDup, isSplit:false, locked:false,
       addedBy:S.user?.name||"",
@@ -893,7 +895,7 @@ function renderUpload(){
     <div class="filters">
       <select onchange="setFilter('filterEntity',this.value)" style="min-width:180px">
         <option value="all">All entities</option>
-        ${ents.map(e=>{const o=allEnts.find(x=>x.name===e);const s=o?` (···${o.account.slice(-6)})`:"";return`<option value="${e}" ${S.filterEntity===e?"selected":""}>${e}${s}</option>`;}).join("")}
+        ${uniqueEntityNames().map(e=>{const o=allEnts.find(x=>x.name===e);const s=o?` (···${o.account.slice(-6)})`:"";return`<option value="${e}" ${S.filterEntity===e?"selected":""}>${e}${s}</option>`;}).join("")}
       </select>
       <select onchange="setFilter('filterStatus',this.value)">
         <option value="all">All statuses</option>
@@ -954,7 +956,8 @@ function renderExportMenu(ents){
 function renderRow(t){
   const isEdit=S.editId===t.id;
   const isSel=S.selectedTxns.has(t.id);
-  const rowCls=isSel?"selected-row":t.status==="booked"||t.status==="approved"?"row-green":
+  const rowCls=isSel?"selected-row":t.status==="voided"?"row-voided":
+    t.status==="booked"||t.status==="approved"?"row-green":
     t.rowColor==="amber"?"row-amber":t.rowColor==="red"?"row-red":
     t.status==="rejected"?"row-grey":"";
 
@@ -1000,10 +1003,15 @@ function renderRow(t){
     actions+=`<button onclick="startEdit('${t.id}')" class="btn-sm" style="display:block;width:100%;margin-bottom:2px;background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">Edit</button>`;
     if(t.status!=="flagged")
       actions+=`<button onclick="setStatus('${t.id}','flagged')" class="btn-amber btn-sm" style="display:block;width:100%;margin-bottom:2px">Flag</button>`;
-    if(t.status!=="rejected")
+    if(t.status!=="rejected"&&t.status!=="voided")
       actions+=`<button onclick="setStatus('${t.id}','rejected')" class="btn-danger btn-sm" style="display:block;width:100%">Reject</button>`;
+    if(t.status==="rejected")
+      actions+=`<button onclick="undoVoid('${t.id}')" class="btn-sm btn-amber" style="display:block;width:100%;margin-top:2px">↩ Undo</button>`;
+  } else if(t.status==="voided"){
+    actions=`<button onclick="undoVoid('${t.id}')" class="btn-sm" style="background:var(--amber-lt);color:var(--amber);border-color:var(--amber-bd);display:block;width:100%">↩ Restore</button>`;
   } else {
     actions=`<span style="font-size:10px;color:var(--text3)">🔒 Locked</span>`;
+    if(canAdmin()) actions+=`<button onclick="unlockTxn('${t.id}')" class="btn-xs" style="margin-top:3px;display:block;width:100%;color:var(--amber)">🔓 Unlock</button>`;
   }
 
   return`<tr class="${rowCls}" data-id="${t.id}" onclick="handleRowClick(event,'${t.id}')">
@@ -1325,40 +1333,187 @@ function downloadTemplate(type){
   a.download=`Template_${type}_${today()}.csv`;a.click();
 }
 
+// ─── BALANCE HELPERS ─────────────────────────────────
+function saveDailyBalance(account, date, balanceVal){
+  if(!S.dailyBalances[account]) S.dailyBalances[account]={};
+  var amt = parseFloat(String(balanceVal).replace(/,/g,""))||0;
+  if(date==="opening"){
+    S.dailyBalances[account]["opening"] = amt;
+    S.dailyBalances[account]["opening_by"] = S.user?S.user.name:"";
+  } else {
+    // Store as object: {amount, enteredBy, enteredAt, expected, matched}
+    var expected = getExpectedBalance(account);
+    var matched = Math.abs(amt - expected) < 1;
+    S.dailyBalances[account][date] = {
+      amount: amt,
+      enteredBy: S.user?S.user.name:"",
+      enteredAt: new Date().toLocaleString(),
+      expected: expected,
+      matched: matched
+    };
+    audit("BALANCE","···"+account.slice(-6)+" | "+date+" | Bank="+amt+" | Expected="+expected.toFixed(2)+" | "+(matched?"✅ MATCH":"❌ VARIANCE: "+(Math.abs(amt-expected)).toFixed(2)));
+  }
+  ls("brp3_balances", S.dailyBalances);
+  render();
+}
+
+function getExpectedBalance(account){
+  var ob = (S.dailyBalances[account] && S.dailyBalances[account]["opening"]) ? S.dailyBalances[account]["opening"] : 0;
+  var txns = S.txns.concat(S.bookings).filter(function(t){ return t.entityAcct===account && t.status==="booked"; });
+  var credits = txns.filter(function(t){return t.type==="Cash Receipt";}).reduce(function(s,t){return s+t.amount;},0);
+  var debits  = txns.filter(function(t){return t.type==="Payment Journal";}).reduce(function(s,t){return s+t.amount;},0);
+  return ob + credits - debits;
+}
+
+function getActualBalance(account, date){
+  var b = S.dailyBalances[account] && S.dailyBalances[account][date];
+  if(b===undefined||b===null) return null;
+  if(typeof b==="object") return b.amount;
+  return b;
+}
+
+function getBalanceMeta(account, date){
+  var b = S.dailyBalances[account] && S.dailyBalances[account][date];
+  if(!b||typeof b!=="object") return null;
+  return b; // {amount, enteredBy, enteredAt, expected, matched}
+}
+
+// Get weekdays in current month up to today
+function getWorkdays(){
+  var now=new Date(), yr=now.getFullYear(), mo=now.getMonth();
+  var days=[];
+  for(var d=1;d<=now.getDate();d++){
+    var dt=new Date(yr,mo,d);
+    if(dt.getDay()!==0&&dt.getDay()!==6) days.push(new Date(yr,mo,d).toISOString().slice(0,10));
+  }
+  return days;
+}
+
 // ─── TAB 3: RECONCILIATION ───────────────────────────
+
+
 function renderRecon(){
   const ents=allEntities();
   const dups=detectDuplicatePayments();
+  const today2=new Date().toISOString().slice(0,10);
+
+  // Stats for header
+  const totalEnts=ents.length;
+  const reconciledEnts=ents.filter(en=>{
+    const bal=S.dailyBalances[en.account];
+    if(!bal||!bal[today2]) return false;
+    const expected=getExpectedBalance(en.account,en.name);
+    return Math.abs(bal[today2]-expected)<1;
+  }).length;
+
   return`
-    <h2 style="font-size:15px;font-weight:600;margin-bottom:4px">Reconciliation</h2>
-    <p style="font-size:11px;color:var(--text3);margin-bottom:12px">JP Morgan closing balance vs D365 posted total · variance per entity</p>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div>
+        <h2 style="font-size:15px;font-weight:600;margin-bottom:4px">Reconciliation</h2>
+        <p style="font-size:11px;color:var(--text3)">Daily bank balance vs booked transactions · Enter actual bank balance each day</p>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select onchange="S.reconFilter=this.value;render()" style="height:32px">
+          <option value="all">All entities</option>
+          <option value="data">Has data only</option>
+          <option value="balanced">✅ Balanced</option>
+          <option value="unbalanced">⚠ Needs attention</option>
+        </select>
+        <button onclick="exportRecon()" class="btn-primary btn-sm">⬇ Export</button>
+      </div>
+    </div>
 
     ${dups.length>0?`<div class="alert alert-warn" style="margin-bottom:12px">
-      <span>⚠</span><div><strong>Duplicate payment detector:</strong> ${dups.length} potential duplicate payment(s) found — same vendor, same amount within 7 days.
-      ${dups.slice(0,3).map(d=>`<div style="margin-top:4px;font-size:10px">${d.t1.entity} · ${d.t1.accountNo} · ${fmtAmt(d.t1.amount)} · ${d.diff} day(s) apart</div>`).join("")}
+      <span>⚠</span><div><strong>Duplicate payments detected:</strong> ${dups.length} case(s) — same vendor, same amount within 7 days.
+      ${dups.slice(0,3).map(d=>`<div style="margin-top:3px;font-size:10px;font-family:'DM Mono',monospace">${d.t1.entity} · Vendor ${d.t1.accountNo} · ${fmtAmt(d.t1.amount)} · ${d.diff} day(s) apart</div>`).join("")}
       </div></div>`:""}
 
     <div class="entity-grid">
-      ${ents.map(en=>{
+      ${ents.filter(en=>{
+        const entTxns=[...S.txns,...S.bookings].filter(t=>t.entity===en.name&&t.entityAcct===en.account);
+        const hasBal=S.dailyBalances[en.account]&&S.dailyBalances[en.account][today2];
+        if(S.reconFilter==="data"&&entTxns.length===0) return false;
+        if(S.reconFilter==="balanced"){
+          if(!hasBal) return false;
+          const exp=getExpectedBalance(en.account,en.name);
+          return Math.abs(S.dailyBalances[en.account][today2]-exp)<1;
+        }
+        if(S.reconFilter==="unbalanced"){
+          if(entTxns.length===0&&!hasBal) return false;
+          if(hasBal){const exp=getExpectedBalance(en.account,en.name);return Math.abs(S.dailyBalances[en.account][today2]-exp)>=1;}
+          return entTxns.length>0;
+        }
+        return true;
+      }).map(en=>{
         const entTxns=[...S.txns,...S.bookings].filter(t=>t.entity===en.name&&t.entityAcct===en.account);
         const booked=entTxns.filter(t=>t.status==="booked");
-        const pending=entTxns.filter(t=>t.status!=="booked"&&t.status!=="rejected");
-        const ok=entTxns.length>0&&pending.length===0;
-        const reconKey=`${en.name}|${en.account}`;
-        return`<div class="entity-card${ok&&entTxns.length>0?" reconciled":""}" onclick="openReconDrawer('${reconKey}')">
+        const pending=entTxns.filter(t=>t.status!=="booked"&&t.status!=="rejected"&&t.status!=="voided");
+        const allBooked=entTxns.length>0&&pending.length===0;
+        const reconKey=en.name+"|"+en.account;
+        const expected=getExpectedBalance(en.account,en.name);
+        const actual=getActualBalance(en.account,today2);
+        const variance=actual!==null?Math.abs(actual-expected):null;
+        const balanced=variance!==null&&variance<1;
+        const balMeta=getBalanceMeta(en.account,today2);
+        const ob=S.dailyBalances[en.account]?.opening||null;
+        return`<div class="entity-card${balanced?" reconciled":""}" onclick="openReconDrawer('${reconKey}')">
           <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-            <span style="font-size:11px;font-weight:600;flex:1;line-height:1.4">${en.name}</span>
-            <span class="e-dot" style="background:${entTxns.length===0?"#d1d5db":ok?"var(--green)":"#f59e0b"}"></span>
+            <span style="font-size:11px;font-weight:600;flex:1;line-height:1.3">${en.name}</span>
+            <span class="e-dot" style="background:${balanced?"var(--green)":actual!==null?"var(--red)":entTxns.length===0?"#d1d5db":"#f59e0b"}"></span>
           </div>
-          <div style="font-size:10px;font-family:'DM Mono',monospace;color:var(--text3);margin-bottom:8px">···${en.account.slice(-6)} · ${en.currency}</div>
-          ${entTxns.length===0?`<div style="font-size:11px;color:var(--text3)">No data</div>`:`
+          <div style="font-size:10px;font-family:'DM Mono',monospace;color:var(--text3);margin-bottom:6px">···${en.account.slice(-6)} · ${en.currency}</div>
+          ${entTxns.length>0?`
           <div class="progress-bar"><div class="progress-fill" style="width:${Math.round(booked.length/Math.max(entTxns.length,1)*100)}%"></div></div>
-          <div style="font-size:10px;color:var(--text2);margin-top:3px">${booked.length}/${entTxns.length} booked · ${pending.length} pending</div>
-          <div style="font-size:10px;margin-top:4px;font-weight:600;color:${ok?"var(--green)":"var(--amber)"}">${ok?"✓ All booked":"⏳ In progress"}</div>`}
-          <div style="font-size:10px;color:var(--blue);margin-top:6px">View detail →</div>
+          <div style="font-size:10px;color:var(--text2);margin-top:2px;margin-bottom:6px">${booked.length}/${entTxns.length} booked · ${pending.length} pending</div>`:""}
+          <div style="border-top:1px solid var(--border);padding-top:6px;margin-top:2px">
+            <div style="font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Daily Balance Check</div>
+            ${ob===null?`<div style="font-size:10px;color:var(--amber);margin-bottom:4px">⚠ Set opening balance first</div>`:`<div style="font-size:10px;color:var(--text2);margin-bottom:4px">Opening: <strong>${en.currency} ${ob.toLocaleString("en-US",{minimumFractionDigits:2})}</strong></div>`}
+            <div style="display:flex;gap:4px;margin-bottom:4px">
+              <input type="number" placeholder="Opening bal" value="${ob||""}" step="0.01"
+                onclick="event.stopPropagation()"
+                onchange="event.stopPropagation();saveDailyBalance('${en.account}','opening',this.value)"
+                style="width:100%;font-size:10px;padding:3px 6px;height:26px" title="Set opening balance for this month">
+            </div>
+            <div style="font-size:10px;color:var(--text2);margin-bottom:4px">Expected: <strong style="font-family:'DM Mono',monospace">${en.currency} ${expected.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div>
+            <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
+              <input type="number" placeholder="Actual bank bal today" value="${actual!==null?actual:""}" step="0.01"
+                onclick="event.stopPropagation()"
+                onchange="event.stopPropagation();saveDailyBalance('${en.account}','${today2}',this.value)"
+                style="width:100%;font-size:10px;padding:3px 6px;height:26px" title="Enter actual closing balance from JP Morgan today">
+            </div>
+            ${actual!==null?`
+            <div style="font-size:11px;font-weight:600;padding:5px 8px;border-radius:4px;text-align:center;background:${balanced?"var(--green-lt)":"var(--red-lt)"};color:${balanced?"var(--green)":"var(--red)"}">
+              ${balanced?"✅ BALANCED":"⚠ Variance: "+en.currency+" "+variance.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}
+            </div>
+            ${balMeta?`<div style="font-size:10px;color:var(--text3);text-align:center;margin-top:4px">Entered by ${balMeta.enteredBy} · ${balMeta.enteredAt}</div>`:""}
+            `:`<div style="font-size:10px;color:var(--text3);text-align:center">Enter today's bank balance ↑</div>`}
+          </div>
+          <div style="font-size:10px;color:var(--blue);margin-top:8px">View transactions →</div>
         </div>`;
       }).join("")}
     </div>`;
+}
+
+function exportRecon(){
+  const ents=allEntities();
+  const today2=new Date().toISOString().slice(0,10);
+  const h=["Entity","Account","Currency","Booked Txns","Pending","Total Credits","Total Debits","Opening Balance","Expected Balance","Actual Balance","Variance","Status"];
+  const rows=[h.join(",")];
+  ents.forEach(function(en){
+    const entTxns=[...S.txns,...S.bookings].filter(t=>t.entity===en.name&&t.entityAcct===en.account&&t.status==="booked");
+    const pending=[...S.txns].filter(t=>t.entity===en.name&&t.entityAcct===en.account&&t.status!=="booked"&&t.status!=="rejected"&&t.status!=="voided").length;
+    const credits=entTxns.filter(t=>t.type==="Cash Receipt").reduce((s,t)=>s+t.amount,0);
+    const debits=entTxns.filter(t=>t.type==="Payment Journal").reduce((s,t)=>s+t.amount,0);
+    const ob=S.dailyBalances[en.account]?.opening||0;
+    const expected=getExpectedBalance(en.account,en.name);
+    const actual=S.dailyBalances[en.account]?.[today2]||"";
+    const variance=actual!==""?Math.abs(actual-expected):"";
+    const status=actual!==""?(Math.abs(actual-expected)<1?"BALANCED":"VARIANCE"):"NO BALANCE ENTERED";
+    rows.push(['"'+en.name+'"',en.account,en.currency,entTxns.length,pending,credits.toFixed(2),debits.toFixed(2),ob.toFixed(2),expected.toFixed(2),actual,variance!==""?variance.toFixed(2):"",status].join(","));
+  });
+  const blob=new Blob([rows.join("\n")],{type:"text/csv"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="Reconciliation_"+today()+".csv";a.click();
+  audit("EXPORT_RECON","Reconciliation report");
 }
 
 function openReconDrawer(reconKey){
@@ -1413,6 +1568,98 @@ function closeDrawer(){
 }
 
 // ─── TAB 4: TEAM DASHBOARD ───────────────────────────
+function renderBalanceKPI(){
+  var ents = allEntities();
+  var days = getWorkdays();
+  var totalWorkdays = days.length;
+
+  // ── PER USER KPI ──────────────────────────────────────
+  var userStats = {}; // {name: {entered:0, matched:0}}
+  USERS.forEach(function(u){ userStats[u.name]={entered:0,matched:0}; });
+
+  ents.forEach(function(en){
+    days.forEach(function(day){
+      var meta = getBalanceMeta(en.account, day);
+      if(meta && meta.enteredBy){
+        if(!userStats[meta.enteredBy]) userStats[meta.enteredBy]={entered:0,matched:0};
+        userStats[meta.enteredBy].entered++;
+        if(meta.matched) userStats[meta.enteredBy].matched++;
+      }
+    });
+  });
+
+  var userRows="";
+  USERS.forEach(function(u){
+    var st=userStats[u.name]||{entered:0,matched:0};
+    if(st.entered===0) return;
+    var pct=Math.round(st.matched/st.entered*100);
+    var col=pct===100?"var(--green)":pct>=70?"#f59e0b":"var(--red)";
+    var bg=pct===100?"var(--green-lt)":pct>=70?"var(--amber-lt)":"var(--red-lt)";
+    userRows+="<tr style='background:"+bg+"20'>";
+    userRows+="<td style='font-weight:600;font-size:12px'>"+u.name+"</td>";
+    userRows+="<td><span class='role-pill "+(u.role==="admin"?"role-admin":u.role==="manager"?"role-manager":"role-user")+"'>"+u.role.toUpperCase()+"</span></td>";
+    userRows+="<td style='font-size:11px;color:var(--text2)'>"+st.entered+" balance entries</td>";
+    userRows+="<td style='font-weight:600;color:"+col+"'>"+st.matched+"/"+st.entered+" matched</td>";
+    userRows+="<td><div style='height:8px;background:#e9ecef;border-radius:4px;width:100px'><div style='height:8px;background:"+col+";border-radius:4px;width:"+pct+"%'></div></div></td>";
+    userRows+="<td><span style='font-size:12px;font-weight:700;padding:3px 10px;border-radius:20px;background:"+bg+";color:"+col+"'>"+pct+"%</span></td>";
+    userRows+="</tr>";
+  });
+
+  // ── PER ENTITY KPI ────────────────────────────────────
+  var entRows="";
+  var hasEntityData=false;
+  ents.forEach(function(en){
+    var balanced=0,total=0,lastEnteredBy="",lastVariance=null;
+    days.forEach(function(day){
+      var meta=getBalanceMeta(en.account,day);
+      var actual=getActualBalance(en.account,day);
+      if(actual!==null){
+        total++;
+        hasEntityData=true;
+        var expected=getExpectedBalance(en.account);
+        var isMatch=Math.abs(actual-expected)<1;
+        if(isMatch) balanced++;
+        if(meta&&meta.enteredBy) lastEnteredBy=meta.enteredBy;
+        lastVariance=actual-expected;
+      }
+    });
+    if(total===0) return;
+    var pct=Math.round(balanced/total*100);
+    var col=pct===100?"var(--green)":pct>=70?"#f59e0b":"var(--red)";
+    var bg=pct===100?"var(--green-lt)":pct>=70?"var(--amber-lt)":"var(--red-lt)";
+    var varStr=lastVariance!==null?(Math.abs(lastVariance)<1?"✅":("⚠ "+en.currency+" "+Math.abs(lastVariance).toFixed(2))):"—";
+    entRows+="<tr>";
+    entRows+="<td style='font-size:11px;font-weight:500'>"+en.name+"</td>";
+    entRows+="<td style='font-family:DM Mono,monospace;font-size:10px;color:var(--text3)'>"+en.currency+" ···"+en.account.slice(-6)+"</td>";
+    entRows+="<td style='font-size:11px;font-weight:600;color:"+col+"'>"+balanced+"/"+total+" days</td>";
+    entRows+="<td><div style='height:8px;background:#e9ecef;border-radius:4px;width:100px'><div style='height:8px;background:"+col+";border-radius:4px;width:"+pct+"%'></div></div></td>";
+    entRows+="<td><span style='font-size:12px;font-weight:700;padding:3px 10px;border-radius:20px;background:"+bg+";color:"+col+"'>"+pct+"%</span></td>";
+    entRows+="<td style='font-size:10px;color:var(--text3)'>"+lastEnteredBy+"</td>";
+    entRows+="<td style='font-size:10px;font-weight:500;color:"+(Math.abs(lastVariance||1)<1?"var(--green)":"var(--red)")+"'>"+varStr+"</td>";
+    entRows+="</tr>";
+  });
+
+  var html="";
+
+  // User KPI section
+  if(userRows){
+    html+="<div style='font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px'>👤 By Team Member</div>";
+    html+="<div class='tbl-wrap' style='margin-bottom:16px'><table><thead><tr><th>Name</th><th>Role</th><th>Entries</th><th>Matched Days</th><th>Accuracy</th><th>Score</th></tr></thead><tbody>"+userRows+"</tbody></table></div>";
+  } else {
+    html+="<p style='font-size:11px;color:var(--text3);margin-bottom:12px'>No team member has entered balances yet this month.</p>";
+  }
+
+  // Entity KPI section
+  if(hasEntityData){
+    html+="<div style='font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px'>🏦 By Entity</div>";
+    html+="<div class='tbl-wrap'><table><thead><tr><th>Entity</th><th>Account</th><th>Days Matched</th><th>Accuracy</th><th>Score</th><th>Last Entered By</th><th>Latest Variance</th></tr></thead><tbody>"+entRows+"</tbody></table></div>";
+  } else {
+    html+="<p style='font-size:11px;color:var(--text3)'>No entity balance data yet. Enter actual closing balances in the Reconciliation tab each day.</p>";
+  }
+
+  return html;
+}
+
 function renderDashboard(){
   const ents=allEntities();
   const bookedTxns=S.txns.filter(t=>t.status==="booked");
@@ -1454,6 +1701,12 @@ function renderDashboard(){
       }).join("")}
     </div>
 
+    <h3 style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--text3);margin:0 0 10px">🏦 Bank Balance Accuracy — KPI</h3>
+    <div class="card" style="margin-bottom:20px">
+      <p style="font-size:11px;color:var(--text3);margin-bottom:10px">Daily closing balance accuracy · Weekdays in current month · Enter balances in Reconciliation tab</p>
+      ${renderBalanceKPI()}
+    </div>
+
     <h3 style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--text3);margin-bottom:10px">Entity Progress</h3>
     <div class="entity-grid">
       ${ents.map(en=>{
@@ -1474,7 +1727,8 @@ function renderDashboard(){
       }).join("")}
     </div>
 
-    <h3 style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--text3);margin:16px 0 8px">Upload Sessions</h3>
+
+        <h3 style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--text3);margin:16px 0 8px">Upload Sessions</h3>
     ${S.sessions.length===0?`<p style="font-size:12px;color:var(--text3)">No uploads yet.</p>`:`
     <div class="tbl-wrap">
       <table>
@@ -1866,9 +2120,24 @@ async function saveRule(){
   S.rules=[...S.rules,rule];
   ls("brp3_rules",S.rules);
   audit("RULE_ADD",`${rule.name}`);
+  // Auto-apply new rule to existing pending transactions
+  var reapplied=0;
+  S.txns=S.txns.map(function(t){
+    if(t.status==="booked"||t.status==="rejected"||t.locked) return t;
+    if(rule.entity&&rule.entity!==t.entity) return t;
+    if(rule.entityAcct&&rule.entityAcct!==t.entityAcct) return t;
+    if(rule.descContains&&t.description.toLowerCase().indexOf(rule.descContains.toLowerCase())>=0){
+      reapplied++;
+      return Object.assign({},t,{accountType:rule.accountType,accountNo:rule.accountNo,
+        balAccountType:rule.balAccountType,balAccountNo:rule.balAccountNo,
+        confidence:80,matchedRule:rule.name,status:"approved",rowColor:"green"});
+    }
+    return t;
+  });
+  saveSession();
   S.newRule={name:"",descContains:"",entity:"",entityAcct:"",type:"",accountType:"Vendor",accountNo:"",balAccountType:"Bank Account",balAccountNo:""};
-  S.ruleMsg="✅ Rule saved!";render();
-  setTimeout(()=>{S.ruleMsg="";render();},3000);
+  S.ruleMsg="✅ Rule saved! Applied to "+reapplied+" existing transactions.";render();
+  setTimeout(()=>{S.ruleMsg="";render();},4000);
 }
 
 async function deleteRule(id){
@@ -2043,6 +2312,36 @@ function addEntity(){
   ls("brp3_entities",S.extraEntities);
   S.newEntity={name:"",account:"",currency:"",bankName:""};
   S.showNewEntity=false;render();
+}
+
+function unlockTxn(id){
+  if(!canAdmin()){alert("Only admins can unlock entries.");return;}
+  var reason=prompt("Reason for unlocking this entry (required for audit):");
+  if(!reason){alert("A reason is required to unlock.");return;}
+  S.txns=S.txns.map(function(t){
+    return t.id===id?Object.assign({},t,{locked:false,status:"approved",rowColor:"green",unlockedBy:S.user.name,unlockReason:reason}):t;
+  });
+  audit("UNLOCK","Entry "+id+" — Reason: "+reason);
+  saveSession();render();
+}
+
+function voidTxn(id){
+  var t=S.txns.find(function(x){return x.id===id;});
+  if(!t) return;
+  if(!confirm("Void this entry? It will be hidden but kept in history for audit.")) return;
+  S.txns=S.txns.map(function(x){
+    return x.id===id?Object.assign({},x,{status:"voided",rowColor:"grey",voidedBy:S.user.name,voidedAt:new Date().toLocaleString()}):x;
+  });
+  audit("VOID","Entry: "+t.date+" | "+t.entity+" | "+fmtAmt(t.amount));
+  saveSession();render();
+}
+
+function undoVoid(id){
+  S.txns=S.txns.map(function(x){
+    return x.id===id?Object.assign({},x,{status:"pending",rowColor:"red",voidedBy:null}):x;
+  });
+  audit("UNDO_VOID","Entry "+id+" restored");
+  saveSession();render();
 }
 
 function splitTxn(id){
