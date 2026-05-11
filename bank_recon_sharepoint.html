@@ -2119,6 +2119,28 @@ async function initSP(){
 // INIT
 // ═══════════════════════════════════════════════════
 window.onload=()=>{
+  // MIGRATE data from v2 keys to v3 keys (one-time migration)
+  if(!ll("brp3_migrated",false)){
+    var migrate = function(oldKey, newKey){
+      var old = ll(oldKey, null);
+      if(old && Array.isArray(old) && old.length>0 && !ll(newKey,null)){
+        // Add id field if missing
+        var fixed = old.map(function(item,i){ return Object.assign({id:"m-migrate-"+i}, item); });
+        ls(newKey, fixed);
+        console.log("Migrated "+fixed.length+" items from "+oldKey+" to "+newKey);
+      }
+    };
+    migrate("brp2_vendors","brp3_vendors");
+    migrate("brp2_customers","brp3_customers");
+    migrate("brp2_gl","brp3_gl");
+    migrate("brp2_rules","brp3_rules");
+    migrate("brp2_memory","brp3_memory");
+    migrate("brp2_bookings","brp3_bookings");
+    migrate("brp2_sessions","brp3_sessions");
+    migrate("brp2_alerts","brp3_alerts");
+    ls("brp3_migrated", true);
+    console.log("Migration complete!");
+  }
   // Load saved users but always merge with defaults so new default users appear
   const saved=ll("brp3_users",null);
   if(saved&&Array.isArray(saved)&&saved.length>0) USERS=saved;
