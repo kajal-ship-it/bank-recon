@@ -345,6 +345,8 @@ let S = {
   // filters
   filterEntity:"all", filterStatus:"all", filterType:"all",
   filterCcy:"all", filterColor:"all", filterDesc:"", filterIC:"all",
+  colFilters:{date:"",docType:"",extDoc:"",acctType:"",acctNo:"",amount:"",balType:"",balNo:"",ccy:"",status:""},
+  colFilterOpen:null,
   selectedTxns: new Set(),
   // ui
   editId:null, editOriginal:null, exportOpen:false, masterTab:"vendors",
@@ -1094,22 +1096,68 @@ function renderUpload(){
       </select>
       <button onclick="bulkOK()" class="btn-success btn-sm">✓ Bulk OK green (${s.green})</button>
       ${S.filterDesc?`<button onclick="selectAllFiltered()" class="btn-sm" style="background:var(--blue-lt);color:var(--blue);border-color:var(--blue-bd)">☑ Select all ${getFiltered().length} filtered</button>`:""}
-      <div class="export-wrap" style="margin-left:auto">
-        <button onclick="S.exportOpen=!S.exportOpen;render()" class="btn-primary btn-sm">Export ▾</button>
-        ${S.exportOpen?renderExportMenu(ents):""}
+      <div style="display:flex;gap:6px;align-items:center;margin-left:auto">
+        ${canAdmin()&&S.txns.filter(t=>t.status==="booked").length>0?`
+        <div style="position:relative">
+          <button onclick="S.voidMenuOpen=!S.voidMenuOpen;render()" class="btn-sm btn-danger" style="display:flex;align-items:center;gap:4px">
+            🗑 Void Booked ▾
+          </button>
+          ${S.voidMenuOpen?`<div style="position:absolute;right:0;top:calc(100%+4px);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);z-index:100;min-width:240px;box-shadow:var(--shadow-md)">
+            <div style="padding:4px 14px;font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;background:#f8f9fb;border-bottom:1px solid var(--border)">Void booked entries</div>
+            ${S.filterEntity!=="all"?`<div style="padding:8px 14px;cursor:pointer;font-size:12px;border-bottom:1px solid #f4f5f7;color:var(--red)" onclick="voidBookedByFilter()">🗑 Void booked for current filter (${S.txns.filter(t=>t.status==="booked"&&(S.filterEntity==="all"||(S.filterEntity.includes("|")?t.entity===S.filterEntity.split("|")[0]&&t.entityAcct===S.filterEntity.split("|")[1]:t.entity===S.filterEntity))).length})</div>`:""}
+            <div style="padding:8px 14px;cursor:pointer;font-size:12px;color:var(--red)" onclick="voidAllBooked()">🗑 Void ALL booked entries (${S.txns.filter(t=>t.status==="booked").length})</div>
+          </div>`:""}
+        </div>`:""}
+        <div class="export-wrap">
+          <button onclick="S.exportOpen=!S.exportOpen;render()" class="btn-primary btn-sm">Export ▾</button>
+          ${S.exportOpen?renderExportMenu(ents):""}
+        </div>
       </div>
     </div>
 
     <div class="tbl-wrap" id="txn-table">
       <table>
-        <thead><tr>
+        <thead>
+        ${hasColFilters()?`<tr><td colspan="17" style="background:var(--amber-lt);padding:4px 10px;font-size:11px;color:var(--amber);border-bottom:1px solid var(--amber-bd)">
+          ⚠ Column filters active — <button onclick="clearColFilters()" class="btn-xs btn-amber" style="margin-left:6px">Clear all column filters</button>
+        </td></tr>`:""}
+        <tr>
           <th><input type="checkbox" onchange="toggleSelectAll(this.checked)" title="Select all"></th>
-          <th>Posting Date</th><th>Doc Date</th><th>Doc Type</th><th>Doc No.</th>
-          <th>Ext. Doc No.</th><th>Acct Type</th><th>Account No.</th>
-          <th style="min-width:160px">Description</th>
-          <th>Amount</th><th>Bal. Type</th><th>Bal. No.</th>
-          <th>CCY</th><th>Match</th><th>Status</th><th>Actions</th>
-        </tr></thead>
+          ${renderColHeader("Posting Date","date")}
+          ${renderColHeader("Doc Date","")}
+          ${renderColHeader("Doc Type","docType")}
+          <th style="font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px">Doc No.</th>
+          ${renderColHeader("Ext. Doc No.","extDoc")}
+          ${renderColHeader("Acct Type","acctType")}
+          ${renderColHeader("Account No.","acctNo")}
+          <th style="min-width:160px;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px">Description</th>
+          ${renderColHeader("Amount","amount")}
+          ${renderColHeader("Bal. Type","balType")}
+          ${renderColHeader("Bal. No.","balNo")}
+          ${renderColHeader("CCY","ccy")}
+          <th style="font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px">Match</th>
+          ${renderColHeader("Status","status")}
+          <th style="font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px">Actions</th>
+        </tr>
+        ${S.colFilterOpen?`<tr style="background:#f0f4ff">
+          <td></td>
+          <td><input placeholder="Filter date…" value="${S.colFilters.date}" oninput="S.colFilters.date=this.value;render()" onclick="event.stopPropagation()" style="width:90px;font-size:11px;height:26px;padding:2px 6px"></td>
+          <td></td>
+          <td><input placeholder="Filter…" value="${S.colFilters.docType}" oninput="S.colFilters.docType=this.value;render()" onclick="event.stopPropagation()" style="width:80px;font-size:11px;height:26px;padding:2px 6px"></td>
+          <td></td>
+          <td><input placeholder="Filter ref…" value="${S.colFilters.extDoc}" oninput="S.colFilters.extDoc=this.value;render()" onclick="event.stopPropagation()" style="width:80px;font-size:11px;height:26px;padding:2px 6px"></td>
+          <td><input placeholder="Filter type…" value="${S.colFilters.acctType}" oninput="S.colFilters.acctType=this.value;render()" onclick="event.stopPropagation()" style="width:80px;font-size:11px;height:26px;padding:2px 6px"></td>
+          <td><input placeholder="Filter no…" value="${S.colFilters.acctNo}" oninput="S.colFilters.acctNo=this.value;render()" onclick="event.stopPropagation()" style="width:100px;font-size:11px;height:26px;padding:2px 6px"></td>
+          <td></td>
+          <td><input placeholder="Filter amt…" value="${S.colFilters.amount}" oninput="S.colFilters.amount=this.value;render()" onclick="event.stopPropagation()" style="width:80px;font-size:11px;height:26px;padding:2px 6px"></td>
+          <td><input placeholder="Filter…" value="${S.colFilters.balType}" oninput="S.colFilters.balType=this.value;render()" onclick="event.stopPropagation()" style="width:80px;font-size:11px;height:26px;padding:2px 6px"></td>
+          <td><input placeholder="Filter…" value="${S.colFilters.balNo}" oninput="S.colFilters.balNo=this.value;render()" onclick="event.stopPropagation()" style="width:100px;font-size:11px;height:26px;padding:2px 6px"></td>
+          <td><input placeholder="CCY…" value="${S.colFilters.ccy}" oninput="S.colFilters.ccy=this.value;render()" onclick="event.stopPropagation()" style="width:45px;font-size:11px;height:26px;padding:2px 6px"></td>
+          <td></td>
+          <td><input placeholder="Status…" value="${S.colFilters.status}" oninput="S.colFilters.status=this.value;render()" onclick="event.stopPropagation()" style="width:70px;font-size:11px;height:26px;padding:2px 6px"></td>
+          <td></td>
+        </tr>`:""}
+        </thead>
         <tbody>${filtered.map(t=>renderRow(t)).join("")}</tbody>
       </table>
     </div>
@@ -2594,6 +2642,7 @@ function bindEvents(){
   // Close dropdowns on outside click
   document.onclick=e=>{
     if(S.exportOpen&&!e.target.closest(".export-wrap")){S.exportOpen=false;render();}
+    if(S.voidMenuOpen&&!e.target.closest(".void-menu-wrap")){S.voidMenuOpen=false;render();}
     if(!e.target.closest(".search-wrap")){
       document.querySelectorAll(".search-drop").forEach(d=>{if(d) d.style.display="none";});
     }
@@ -2781,6 +2830,48 @@ function toggleSelectAll(checked){
 function selectAllFiltered(){
   getFiltered().forEach(t=>S.selectedTxns.add(t.id));
   render();
+}
+
+function voidAllBooked(){
+  S.voidMenuOpen=false;
+  var booked=S.txns.filter(function(t){return t.status==="booked";});
+  if(!booked.length){render();return;}
+  if(!confirm("Void ALL "+booked.length+" booked entries?\n\n⚠ WARNING: If any were already exported to D365, you must manually reverse them in D365 too.\n\n✅ Balance recalculates immediately\n✅ Entries kept in history\n✅ Can be restored")) return;
+  S.txns=S.txns.map(function(t){
+    return t.status==="booked"?Object.assign({},t,{status:"voided",rowColor:"grey",locked:false,voidedBy:S.user.name,voidedAt:new Date().toLocaleString()}):t;
+  });
+  S.bookings=S.bookings.map(function(t){
+    return Object.assign({},t,{status:"voided",voidedBy:S.user.name});
+  });
+  ls("brp3_bookings",S.bookings);
+  audit("VOID_ALL_BOOKED","Voided "+booked.length+" booked entries");
+  addAlert("info",S.user.name+" voided ALL "+booked.length+" booked entries");
+  saveSession();render();
+}
+
+function voidBookedByFilter(){
+  S.voidMenuOpen=false;
+  var toVoid=S.txns.filter(function(t){
+    if(t.status!=="booked") return false;
+    if(S.filterEntity==="all") return true;
+    if(S.filterEntity.includes("|")){
+      var parts=S.filterEntity.split("|");
+      return t.entity===parts[0]&&t.entityAcct===parts[1];
+    }
+    return t.entity===S.filterEntity;
+  });
+  if(!toVoid.length){render();return;}
+  var ids=new Set(toVoid.map(function(t){return t.id;}));
+  if(!confirm("Void "+toVoid.length+" booked entries for the current filter?\n\n⚠ If already exported to D365, reverse them there too.\n\n✅ Can be restored by admin")) return;
+  S.txns=S.txns.map(function(t){
+    return ids.has(t.id)?Object.assign({},t,{status:"voided",rowColor:"grey",locked:false,voidedBy:S.user.name,voidedAt:new Date().toLocaleString()}):t;
+  });
+  S.bookings=S.bookings.map(function(t){
+    return ids.has(t.id)?Object.assign({},t,{status:"voided",voidedBy:S.user.name}):t;
+  });
+  ls("brp3_bookings",S.bookings);
+  audit("VOID_FILTERED","Voided "+toVoid.length+" entries for filter: "+S.filterEntity);
+  saveSession();render();
 }
 
 function bulkAction(status){
