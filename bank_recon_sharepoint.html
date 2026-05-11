@@ -966,6 +966,27 @@ function renderTopbar(){
 }
 
 // ─── TAB 0: UPLOAD & REVIEW ──────────────────────────
+
+
+function renderColHeader(label, filterKey){
+  if(!filterKey) return `<th style="font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px">${label}</th>`;
+  var active = S.colFilters && S.colFilters[filterKey] && S.colFilters[filterKey].length>0;
+  return `<th style="font-size:10px;font-weight:600;color:${active?"var(--blue)":"var(--text2)"};text-transform:uppercase;letter-spacing:.4px;cursor:pointer;user-select:none;white-space:nowrap"
+    onclick="S.colFilterOpen=S.colFilterOpen?null:'open';render()" title="Click to show/hide column filters">
+    ${label}${active?" <span style='color:var(--blue)'>▼</span>":" <span style='color:var(--text3);font-size:9px'>⊟</span>"}
+  </th>`;
+}
+
+function hasColFilters(){
+  return S.colFilters && Object.values(S.colFilters).some(function(v){return v&&v.length>0;});
+}
+
+function clearColFilters(){
+  S.colFilters={date:"",docType:"",extDoc:"",acctType:"",acctNo:"",amount:"",balType:"",balNo:"",ccy:"",status:""};
+  S.colFilterOpen=null;
+  render();
+}
+
 function renderUpload(){
   // Safety: reset ALL potentially missing state
   S.colFilters = S.colFilters || {date:"",docType:"",extDoc:"",acctType:"",acctNo:"",amount:"",balType:"",balNo:"",ccy:"",status:""};
@@ -1161,7 +1182,7 @@ function _renderUploadInner(){
     <div class="tbl-wrap" id="txn-table">
       <table>
         <thead>
-        ${hasColFilters()?`<tr><td colspan="17" style="background:var(--amber-lt);padding:4px 10px;font-size:11px;color:var(--amber);border-bottom:1px solid var(--amber-bd)">
+        ${(S.colFilters&&Object.values(S.colFilters).some(function(v){return v&&v.length>0;}))?`<tr><td colspan="17" style="background:var(--amber-lt);padding:4px 10px;font-size:11px;color:var(--amber);border-bottom:1px solid var(--amber-bd)">
           ⚠ Column filters active — <button onclick="clearColFilters()" class="btn-xs btn-amber" style="margin-left:6px">Clear all column filters</button>
         </td></tr>`:""}
         <tr>
