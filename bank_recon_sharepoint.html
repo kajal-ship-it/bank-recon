@@ -265,7 +265,7 @@ const MSAL_CONFIG = {
   auth: {
     clientId: "15b347f5-a964-43ee-b99c-93dd762e1cad",
     authority: "https://login.microsoftonline.com/83bad1a9-fad6-4ae4-a1f4-e200277d7152",
-    redirectUri: window.location.origin+window.location.pathname,
+    redirectUri: "https://kajal-ship-it.github.io/bank-recon/bank_recon_sharepoint.html",
   },
   cache: { cacheLocation:"sessionStorage", storeAuthStateInCookie:true }
 };
@@ -310,8 +310,14 @@ async function getSpToken(){
   } catch(e) {
     // Silent failed - need interactive
     try {
-      await msalInstance.acquireTokenRedirect({ scopes: SP_SCOPES });
-    } catch(e2){ console.warn("Token redirect failed:", e2); }
+      const resp2 = await msalInstance.acquireTokenPopup({ scopes: SP_SCOPES });
+      if(resp2) {
+        _spToken = resp2.accessToken;
+        ls("brp3_sptoken", _spToken);
+        ls("brp3_sptoken_exp", Date.now() + 55*60*1000);
+        return _spToken;
+      }
+    } catch(e2){ console.warn("Token popup failed:", e2); }
     return null;
   }
 }
@@ -319,8 +325,22 @@ async function getSpToken(){
 async function msalLogin(){
   if(!msalInstance) await initMSAL();
   try {
-    await msalInstance.loginRedirect({ scopes: SP_SCOPES });
-  } catch(e){ console.warn("Login redirect failed:", e); }
+    // Use popup - works better on GitHub Pages
+    const resp = await msalInstance.loginPopup({ scopes: SP_SCOPES });
+    if(resp && resp.accessToken){
+      _spToken = resp.accessToken;
+      ls("brp3_sptoken", _spToken);
+      ls("brp3_sptoken_exp", Date.now() + 55*60*1000);
+      S.spStatus="ok";
+      renderTopbar();
+      addAlert("info","Connected to SharePoint as "+resp.account.username);
+      await setupLists();
+      await syncFromSP();
+    }
+  } catch(e){
+    console.warn("Login popup failed:", e);
+    alert("Sign in failed: "+e.message+"\n\nMake sure popups are allowed for this site.");
+  }
 }
 
 // ─── USERS (managed by admin) ───────────────────────
