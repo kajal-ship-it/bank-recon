@@ -421,7 +421,9 @@ function doLogin(){
   S.user=user;
   document.getElementById("login-screen").style.display="none";
   document.getElementById("app").style.display="flex";
-  loadState(); render(); initSP();
+  loadState(); render();
+  // Always try SP — if connected, pull latest data automatically
+  initSP();
 }
 
 function checkSession(){
@@ -963,8 +965,14 @@ function renderTopbar(){
   const unread=S.alerts.filter(a=>!a.read).length;
   let b="";
   if(S.syncing) b+=`<span class="badge badge-blue">⟳ Syncing…</span>`;
-  else if(S.spStatus==="ok") b+=`<span class="badge badge-green">● SharePoint</span> <button onclick="syncFromSP()" class="btn-sm btn-xs" style="font-size:10px;padding:2px 8px">⟳</button>`;
-  else b+=`<span class="badge badge-amber">⚠ Local mode</span>`;
+  else if(S.spStatus==="ok"){
+    b+=`<span class="badge badge-green">● SharePoint</span>`;
+    b+=`<button onclick="syncFromSP()" class="btn-sm btn-xs" style="font-size:10px;padding:2px 8px" title="Pull latest data from SharePoint">⟳ Pull</button>`;
+    if(canAdmin()) b+=`<button onclick="pushAllToSP()" class="btn-sm btn-xs" style="font-size:10px;padding:2px 8px;background:var(--blue);color:#fff;border-color:var(--blue)" title="Push all local data to SharePoint">⬆ Push</button>`;
+  } else {
+    b+=`<span class="badge badge-amber" title="SharePoint not connected — data is local only">⚠ Local mode</span>`;
+    if(canAdmin()) b+=`<button onclick="initSP()" class="btn-sm btn-xs" style="font-size:10px;padding:2px 8px" title="Try to connect to SharePoint">Connect SP</button>`;
+  }
   if(unread>0) b+=`<span class="badge badge-red">🔔 ${unread}</span>`;
   const pv=S.pendingVendors.length+S.pendingCustomers.length+S.pendingGL.length;
   if(pv>0) b+=`<span class="badge badge-amber">⏳ ${pv} approvals</span>`;
@@ -1581,7 +1589,7 @@ function renderMaster(){
   return`
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <div><h2 style="font-size:15px;font-weight:600">Master Data</h2>
-      <p style="font-size:11px;color:var(--text3)">Vendors · Customers · GL Accounts — used for transaction mapping</p></div>
+      <p style="font-size:11px;color:var(--text3)">Vendors · Customers · GL Accounts — used for transaction mapping · ${S.spStatus==="ok"?`<span style="color:var(--green);font-weight:600">● Synced with SharePoint</span>`:`<span style="color:var(--amber);font-weight:600">⚠ Local only — push to SharePoint to share with team</span>`}</p></div>
       <div style="display:flex;gap:8px">
         <button onclick="downloadTemplate('vendors')" class="btn-sm" style="background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">⬇ Vendor Template</button>
         <button onclick="downloadTemplate('customers')" class="btn-sm" style="background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">⬇ Customer Template</button>
@@ -3498,8 +3506,20 @@ async function spDelete(l,id){
     return r.ok||r.status===204;
   }catch(e){return false;}
 }
-async function ensureCol(l,col,type=2){
-  try{const d=await getDigest();if(!d)return;await fetch(`${SP_URL}/_api/web/lists/getbytitle('${l}')/fields`,{method:"POST",credentials:"include",headers:{"Accept":"application/json;odata=nometadata","Content-Type":"application/json;odata=nometadata","X-RequestDigest":d},body:JSON.stringify({"__metadata":{"type":"SP.Field"},"FieldTypeKind":type,"Title":col})});}catch(e){}
+async function ensureCol(l,col,type){
+  type=type||2;
+  try{
+    // Check if column already exists
+    var checkR=await fetch(SP_URL+"/_api/web/lists/getbytitle('"+l+"')/fields?$filter=Title eq '"+col+"'",{headers:{"Accept":"application/json;odata=nometadata"},credentials:"include"});
+    if(checkR.ok){var checkD=await checkR.json();if(checkD.value&&checkD.value.length>0) return;} // already exists
+    const d=await getDigest();
+    if(!d) return;
+    await fetch(SP_URL+"/_api/web/lists/getbytitle('"+l+"')/fields",{
+      method:"POST",credentials:"include",
+      headers:{"Accept":"application/json;odata=nometadata","Content-Type":"application/json;odata=nometadata","X-RequestDigest":d},
+      body:JSON.stringify({"__metadata":{"type":"SP.Field"},"FieldTypeKind":type,"Title":col})
+    });
+  }catch(e){}
 }
 async function setupLists(){
   if(S.spStatus!=="ok")return;
@@ -3577,6 +3597,65 @@ async function initSP(){
   const ok=await spReady();
   if(ok){await setupLists();await syncFromSP();}
   else render();
+}
+
+async function pushAllToSP(){
+  if(S.spStatus!=="ok"){
+    alert("Not connected to SharePoint. Make sure you are logged into SharePoint in another tab first.");
+    return;
+  }
+  S.syncing=true; renderTopbar();
+  addAlert("info","SharePoint push started by "+S.user.name+" — pushing all master data...");
+
+  // Push vendors
+  var vpushed=0;
+  for(var i=0;i<S.vendors.length;i++){
+    var v=S.vendors[i];
+    if(!v.spId){
+      var res=await spAdd("BankReconVendors",{Title:v.name,ItemNo:v.no,ItemName:v.name,Entity:v.entity,Currency:v.currency||"",AddedBy:v.addedBy||"Kajal",AddedAt:v.addedAt||"",ApprovedBy:v.approvedBy||"Kajal",Status:"approved"});
+      if(res){S.vendors[i].spId=res.Id;vpushed++;}
+    }
+  }
+  ls("brp3_vendors",S.vendors);
+
+  // Push GL accounts
+  var gpushed=0;
+  for(var i=0;i<S.glAccounts.length;i++){
+    var g=S.glAccounts[i];
+    if(!g.spId){
+      var res=await spAdd("BankReconGL",{Title:g.name,ItemNo:g.no,ItemName:g.name,Entity:g.entity,Currency:g.currency||"",AddedBy:g.addedBy||"Kajal",AddedAt:g.addedAt||"",ApprovedBy:g.approvedBy||"Kajal",Status:"approved"});
+      if(res){S.glAccounts[i].spId=res.Id;gpushed++;}
+    }
+  }
+  ls("brp3_gl",S.glAccounts);
+
+  // Push customers
+  var cpushed=0;
+  for(var i=0;i<S.customers.length;i++){
+    var c=S.customers[i];
+    if(!c.spId){
+      var res=await spAdd("BankReconCustomers",{Title:c.name,ItemNo:c.no,ItemName:c.name,Entity:c.entity,Currency:c.currency||"",AddedBy:c.addedBy||"Kajal",AddedAt:c.addedAt||"",ApprovedBy:c.approvedBy||"Kajal",Status:"approved"});
+      if(res){S.customers[i].spId=res.Id;cpushed++;}
+    }
+  }
+  ls("brp3_customers",S.customers);
+
+  // Push rules
+  var rpushed=0;
+  for(var i=0;i<S.rules.length;i++){
+    var r=S.rules[i];
+    if(!r.spId){
+      var res=await spAdd("BankReconRules",{Title:r.name,Keyword:r.descContains,JournalType:r.type||"",AccountType:r.accountType,AccountNo:r.accountNo,BalAccountType:r.balAccountType,BalAccountNo:r.balAccountNo,Entity:r.entity||"",EntityAcct:r.entityAcct||"",AddedBy:r.addedBy||S.user.name});
+      if(res){S.rules[i].spId=res.Id;rpushed++;}
+    }
+  }
+  ls("brp3_rules",S.rules);
+
+  S.syncing=false;
+  var msg="✅ SharePoint push complete: "+vpushed+" vendors, "+gpushed+" GL accounts, "+cpushed+" customers, "+rpushed+" rules pushed. All users will now see this data when they sync.";
+  addAlert("info",msg);
+  alert(msg);
+  render();
 }
 
 // ═══════════════════════════════════════════════════
