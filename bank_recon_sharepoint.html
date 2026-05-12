@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Easyship · Bank Reconciliation</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <style>
 :root{
@@ -258,6 +259,69 @@ input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--bl
 // ═══════════════════════════════════════════════════
 const SP_URL = "https://easyship1.sharepoint.com/sites/FinanceAccounting";
 const SESSION_HOURS = 8;
+
+// ── AZURE AD OAUTH CONFIG ───────────────────────────────────────────
+const MSAL_CONFIG = {
+  auth: {
+    clientId: "15b347f5-a964-43ee-b99c-93dd762e1cad",
+    authority: "https://login.microsoftonline.com/83bad1a9-fad6-4ae4-a1f4-e200277d7152",
+    redirectUri: window.location.origin+window.location.pathname,
+  },
+  cache: { cacheLocation:"sessionStorage", storeAuthStateInCookie:true }
+};
+const SP_SCOPES = ["https://easyship1.sharepoint.com/AllSites.Manage","User.Read"];
+let msalInstance = null;
+let _spToken = null;
+
+async function initMSAL(){
+  try {
+    msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
+    await msalInstance.initialize();
+    // Handle redirect response
+    const resp = await msalInstance.handleRedirectPromise();
+    if(resp && resp.accessToken){
+      _spToken = resp.accessToken;
+      ls("brp3_sptoken", _spToken);
+      ls("brp3_sptoken_exp", Date.now() + 55*60*1000);
+    }
+    console.log("MSAL ready");
+  } catch(e){ console.warn("MSAL init failed:", e); }
+}
+
+async function getSpToken(){
+  // Return cached token if valid
+  const exp = ll("brp3_sptoken_exp", 0);
+  const tok = ll("brp3_sptoken", null);
+  if(tok && Date.now() < exp) return tok;
+
+  if(!msalInstance) return null;
+  const accounts = msalInstance.getAllAccounts();
+  if(accounts.length === 0) return null;
+
+  try {
+    const resp = await msalInstance.acquireTokenSilent({
+      scopes: SP_SCOPES,
+      account: accounts[0]
+    });
+    _spToken = resp.accessToken;
+    ls("brp3_sptoken", _spToken);
+    ls("brp3_sptoken_exp", Date.now() + 55*60*1000);
+    return _spToken;
+  } catch(e) {
+    // Silent failed - need interactive
+    try {
+      await msalInstance.acquireTokenRedirect({ scopes: SP_SCOPES });
+    } catch(e2){ console.warn("Token redirect failed:", e2); }
+    return null;
+  }
+}
+
+async function msalLogin(){
+  if(!msalInstance) await initMSAL();
+  try {
+    await msalInstance.loginRedirect({ scopes: SP_SCOPES });
+  } catch(e){ console.warn("Login redirect failed:", e); }
+}
 
 // ─── USERS (managed by admin) ───────────────────────
 const DEFAULT_USERS = [
@@ -971,7 +1035,7 @@ function renderTopbar(){
     if(canAdmin()) b+=`<button onclick="pushAllToSP()" class="btn-sm btn-xs" style="font-size:10px;padding:2px 8px;background:var(--blue);color:#fff;border-color:var(--blue)" title="Push all local data to SharePoint">⬆ Push</button>`;
   } else {
     b+=`<span class="badge badge-amber" title="SharePoint not connected — data is local only">⚠ Local mode</span>`;
-    if(canAdmin()) b+=`<button onclick="initSP()" class="btn-sm btn-xs" style="font-size:10px;padding:2px 8px" title="Try to connect to SharePoint">Connect SP</button>`;
+    if(canAdmin()) b+=`<button onclick="msalLogin()" class="btn-sm btn-xs" style="font-size:10px;padding:2px 8px;background:var(--blue);color:#fff;border-color:var(--blue)" title="Sign in with Microsoft to enable SharePoint sync">🔑 Sign in with Microsoft</button>`;
   }
   if(unread>0) b+=`<span class="badge badge-red">🔔 ${unread}</span>`;
   const pv=S.pendingVendors.length+S.pendingCustomers.length+S.pendingGL.length;
@@ -3464,23 +3528,37 @@ function splitTxn(id){
 let _digest=null,_digestExp=0;
 async function spReady(){
   try{
-    const r=await fetch(`${SP_URL}/_api/web/currentuser?$select=Email`,{headers:{"Accept":"application/json;odata=nometadata"},credentials:"include"});
-    if(!r.ok) return false;
+    const token = await getSpToken();
+    if(!token){ S.spStatus="local"; return false; }
+    const headers = {"Accept":"application/json;odata=nometadata","Authorization":"Bearer "+token};
+    const r=await fetch(SP_URL+"/_api/web/currentuser?$select=Email",{headers});
+    if(!r.ok){ S.spStatus="local"; return false; }
     S.spStatus="ok"; return true;
   }catch(e){S.spStatus="local";return false;}
+}
+
+async function getSpHeaders(){
+  const token = await getSpToken();
+  if(!token) return null;
+  return {"Accept":"application/json;odata=nometadata","Authorization":"Bearer "+token,"Content-Type":"application/json;odata=nometadata"};
 }
 async function getDigest(){
   if(_digest&&Date.now()<_digestExp) return _digest;
   try{
-    const r=await fetch(`${SP_URL}/_api/contextinfo`,{method:"POST",headers:{"Accept":"application/json;odata=nometadata","Content-Type":"application/json;odata=nometadata"},credentials:"include"});
+    const token = await getSpToken();
+    if(!token) return null;
+    const r=await fetch(SP_URL+"/_api/contextinfo",{method:"POST",headers:{"Accept":"application/json;odata=nometadata","Content-Type":"application/json;odata=nometadata","Authorization":"Bearer "+token}});
     const d=await r.json();_digest=d.FormDigestValue;_digestExp=Date.now()+25*60*1000;return _digest;
   }catch(e){return null;}
 }
-async function spGet(l,f="",top=500){
+async function spGet(l,f,top){
+  f=f||"";top=top||500;
   try{
-    let url=`${SP_URL}/_api/web/lists/getbytitle('${l}')/items?$top=${top}`;
-    if(f) url+=`&$filter=${f}`;
-    const r=await fetch(url,{headers:{"Accept":"application/json;odata=nometadata"},credentials:"include"});
+    const token=await getSpToken();
+    if(!token) return null;
+    let url=SP_URL+"/_api/web/lists/getbytitle('"+l+"')/items?$top="+top;
+    if(f) url+="&$filter="+f;
+    const r=await fetch(url,{headers:{"Accept":"application/json;odata=nometadata","Authorization":"Bearer "+token}});
     if(!r.ok) return null;
     return (await r.json()).value||[];
   }catch(e){return null;}
@@ -3594,9 +3672,17 @@ async function spSaveSession(sess){if(S.spStatus!=="ok")return;await spAdd("Bank
 async function spSaveAlert(a){if(S.spStatus!=="ok")return;await spAdd("BankReconAlerts",{Title:(a.msg||"").slice(0,255),AlertType:a.type,Message:(a.msg||"").slice(0,255),AlertTime:a.time,AlertUser:a.user||"",IsRead:"false"});}
 
 async function initSP(){
+  await initMSAL();
   const ok=await spReady();
-  if(ok){await setupLists();await syncFromSP();}
-  else render();
+  if(ok){
+    S.spStatus="ok";
+    renderTopbar();
+    await setupLists();
+    await syncFromSP();
+  } else {
+    S.spStatus="local";
+    render();
+  }
 }
 
 async function pushAllToSP(){
