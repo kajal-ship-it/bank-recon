@@ -5,7 +5,16 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Easyship · Bank Reconciliation</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js" crossorigin="anonymous"></script>
+<script>
+// Fallback if MSAL CDN fails
+if(typeof msal === 'undefined'){
+  var s=document.createElement('script');
+  s.src='https://unpkg.com/@azure/msal-browser@2.38.3/dist/msal-browser.min.js';
+  s.crossOrigin='anonymous';
+  document.head.appendChild(s);
+}
+</script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <style>
 :root{
@@ -323,6 +332,18 @@ async function getSpToken(){
 }
 
 async function msalLogin(){
+  // Wait for MSAL library to load if not ready yet
+  if(typeof msal === 'undefined'){
+    let waited = 0;
+    while(typeof msal === 'undefined' && waited < 5000){
+      await new Promise(r=>setTimeout(r,200));
+      waited+=200;
+    }
+    if(typeof msal === 'undefined'){
+      alert("Microsoft login library failed to load. Check your internet connection and try again.");
+      return;
+    }
+  }
   if(!msalInstance) await initMSAL();
   try {
     // Use popup - works better on GitHub Pages
