@@ -1816,6 +1816,101 @@ function renderMaster(){
     ${filtered.length>500?`<p style="font-size:11px;color:var(--text3);margin-top:6px">Showing 500/${filtered.length} — filter by entity to see all</p>`:""}`;
 }
 
+function exportDataPackage(){
+  var pkg = {
+    version:"1.0", exportedBy:S.user.name, exportedAt:new Date().toLocaleString(),
+    vendors:S.vendors, glAccounts:S.glAccounts, customers:S.customers, rules:S.rules
+  };
+  var blob = new Blob([JSON.stringify(pkg,null,2)],{type:"application/json"});
+  var a = document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download="BankRecon_DataPackage_"+today()+".json"; a.click();
+  addAlert("info",S.user.name+" exported data package: "+S.vendors.length+"v, "+S.glAccounts.length+"g, "+S.rules.length+"r");
+}
+
+function importDataPackage(file){
+  if(!file) return;
+  var reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      var pkg=JSON.parse(e.target.result);
+      if(!pkg.vendors||!pkg.glAccounts){alert("Invalid data package file.");return;}
+      if(!confirm("Import data package from "+( pkg.exportedBy||"Unknown")+"?\n\n"+
+        pkg.vendors.length+" vendors\n"+pkg.glAccounts.length+" GL accounts\n"+(pkg.rules||[]).length+" rules\n\nThis REPLACES your current master data.")) return;
+      S.vendors=pkg.vendors||[];
+      S.glAccounts=pkg.glAccounts||[];
+      S.customers=pkg.customers||[];
+      if(pkg.rules&&pkg.rules.length>0) S.rules=pkg.rules;
+      ls("brp3_vendors",S.vendors); ls("brp3_gl",S.glAccounts);
+      ls("brp3_customers",S.customers); ls("brp3_rules",S.rules);
+      addAlert("info",S.user.name+" imported data package: "+S.vendors.length+"v, "+S.glAccounts.length+"g, "+S.rules.length+"r");
+      alert("✅ Import complete! "+S.vendors.length+" vendors, "+S.glAccounts.length+" GL accounts, "+S.rules.length+" rules loaded.");
+      render();
+    }catch(err){alert("Failed to read data package: "+err.message);}
+  };
+  reader.readAsText(file);
+}
+
+function exportDataPackage(){
+  var pkg = {
+    version: "3.0",
+    exportedBy: S.user.name,
+    exportedAt: new Date().toISOString(),
+    vendors: S.vendors,
+    glAccounts: S.glAccounts,
+    customers: S.customers,
+    rules: S.rules,
+    extraEntities: S.extraEntities||[]
+  };
+  var blob = new Blob([JSON.stringify(pkg, null, 2)], {type:"application/json"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "EasyshipBankRecon_DataPackage_"+today()+".json";
+  a.click();
+  audit("EXPORT_PACKAGE","Exported data package: "+S.vendors.length+"v "+S.glAccounts.length+"g "+S.rules.length+"r");
+  addAlert("info",S.user.name+" exported a data package — share this file with the team to import");
+}
+
+function importDataPackage(input){
+  var file = input.files[0];
+  if(!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var pkg = JSON.parse(e.target.result);
+      if(!pkg.version||!pkg.vendors){
+        alert("Invalid data package file. Please use a file exported from this app.");
+        return;
+      }
+      var msg = "Import data package from "+pkg.exportedBy+" ("+pkg.exportedAt.slice(0,10)+")?\n\n"+
+        "This will REPLACE your current data:\n"+
+        "• "+pkg.vendors.length+" vendors\n"+
+        "• "+pkg.glAccounts.length+" GL accounts\n"+
+        "• "+(pkg.customers||[]).length+" customers\n"+
+        "• "+pkg.rules.length+" rules\n\n"+
+        "Your current transactions and bookings will NOT be affected.";
+      if(!confirm(msg)) return;
+      S.vendors = pkg.vendors||[];
+      S.glAccounts = pkg.glAccounts||[];
+      S.customers = pkg.customers||[];
+      S.rules = pkg.rules||[];
+      if(pkg.extraEntities) S.extraEntities = pkg.extraEntities;
+      ls("brp3_vendors",S.vendors);
+      ls("brp3_gl",S.glAccounts);
+      ls("brp3_customers",S.customers);
+      ls("brp3_rules",S.rules);
+      if(pkg.extraEntities) ls("brp3_entities",S.extraEntities);
+      audit("IMPORT_PACKAGE","Imported data package from "+pkg.exportedBy+": "+S.vendors.length+"v "+S.glAccounts.length+"g "+S.rules.length+"r");
+      addAlert("info","Data package imported successfully — "+S.vendors.length+" vendors, "+S.glAccounts.length+" GL accounts, "+S.rules.length+" rules ready");
+      alert("✅ Import complete!\n\n"+S.vendors.length+" vendors\n"+S.glAccounts.length+" GL accounts\n"+S.customers.length+" customers\n"+S.rules.length+" rules\n\nAll dropdowns are now ready to use.");
+      render();
+    }catch(err){
+      alert("Error reading file: "+err.message);
+    }
+  };
+  reader.readAsText(file);
+  input.value="";
+}
+
 function exportMasterData(type){
   const allItems=type==="vendors"?S.vendors:type==="customers"?S.customers:S.glAccounts;
   const filtered=(S.masterFilter==="all"?allItems:allItems.filter(i=>i.entity===S.masterFilter))
