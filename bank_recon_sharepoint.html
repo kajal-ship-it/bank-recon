@@ -653,26 +653,46 @@ function cleanDesc(raw){
     return v;
   }
 
-  // 2. B/O CUSTOMER= - strip address info after comma/number patterns
+  // 2. B/O CUSTOMER= — ONLY use if it's NOT an Easyship/GoSincro entity
+  // For OUTGOING payments, B/O CUSTOMER = the paying Easyship entity (not the vendor)
+  // So we check BENEFICIARY FIRST when B/O CUSTOMER = Easyship
   const m2 = raw.match(/B\/O CUSTOMER=([^\r\n]+?)(?:\s*\|)/i);
   const m2b = raw.match(/B\/O CUSTOMER=([^\r\n|]+)$/i);
-  const boVal = (m2||m2b) ? ((m2||m2b)[1].trim()) : null;
-  if(boVal && boVal.length>1){
-    // Strip leading account numbers like "185008 10220213 Stripe..."
-    let v = boVal.replace(/^[\d\s]+/,"").trim();
-    // Strip address after company name (numbers/street keywords)
+  const boRaw = (m2||m2b) ? ((m2||m2b)[1].trim()) : null;
+  const boIsEasyship = boRaw && (
+    /EASYSHIP/i.test(boRaw) || /GOSINCRO/i.test(boRaw) || /GO SINCRO/i.test(boRaw) || /ENOVIE/i.test(boRaw)
+  );
+
+  // 3. BENEFICIARY= — this is the REAL vendor for outgoing payments
+  const m3 = raw.match(/BENEFICIARY[^=]*=([^|]+)/i);
+  const beneRaw = m3 ? m3[1].trim() : null;
+
+  // If B/O CUSTOMER is Easyship → use BENEFICIARY as the vendor
+  if(boIsEasyship && beneRaw && beneRaw.length>2){
+    let b = beneRaw.replace(/^[\d\s]+/,"").trim();
+    b = b.replace(/\s+\d{2,}.*$/,"").trim();
+    // Skip generic bank names
+    if(!/JPMC|JPMORGAN|CHASE BANK|IACH/i.test(b) && b.length>2){
+      if(b.toUpperCase().includes("STRIPE")) return "STRIPE";
+      if(b.toUpperCase().includes("EBAY")) return "eBay";
+      if(b.toUpperCase().includes("UPS")) return "UPS";
+      return b.slice(0,60);
+    }
+  }
+
+  // If B/O CUSTOMER is NOT Easyship → it IS the vendor
+  if(boRaw && !boIsEasyship && boRaw.length>1){
+    let v = boRaw.replace(/^[\d\s]+/,"").trim();
     v = v.replace(/\s+\d{2,}.*$/,"").replace(/\s+(ST|AVE|BLVD|RD|DR|LN|WAY|SUITE|STE|FLOOR|FL|UNIT)\b.*/i,"").trim();
-    // Normalize known vendors
     if(v.toUpperCase().includes("STRIPE")) return "STRIPE";
     if(v.toUpperCase().includes("EBAY")) return "eBay";
+    if(v.toUpperCase().includes("UPS")) return "UPS";
     if(v.length>2) return v.slice(0,60);
   }
 
-  // 3. BENEFICIARY= — strip account numbers and addresses
-  const m3 = raw.match(/BENEFICIARY=([^|]+)/i);
-  if(m3){
-    let b = m3[1].trim().replace(/^\d+\s+/,"");
-    // Strip address patterns
+  // Fallback: use BENEFICIARY even if B/O CUSTOMER is not Easyship
+  if(beneRaw && beneRaw.length>2){
+    let b = beneRaw.replace(/^[\d\s]+/,"").trim();
     b = b.replace(/\s+\d{2,}.*$/,"").trim();
     if(b.toUpperCase().includes("STRIPE")) return "STRIPE";
     if(b.toUpperCase().includes("EBAY")) return "eBay";
@@ -1688,7 +1708,8 @@ ${t.description}"
 
   let actions="";
   if(isEdit&&!locked){
-    actions=`<button onclick="saveAndLearn('${t.id}')" class="btn-success btn-sm" style="display:block;width:100%;margin-bottom:2px">Save & Learn</button>
+    actions=`<button onclick="saveAndLearn('${t.id}')" class="btn-success btn-sm" style="display:block;width:100%;margin-bottom:2px" title="Save + create a rule so this vendor is auto-mapped next time">✅ Save & Learn</button>
+      <button onclick="saveOnlyOne('${t.id}')" class="btn-xs" style="display:block;width:100%;margin-bottom:2px;color:var(--text3)" title="Save this row only — no rule created, no other rows affected">Save this row only</button>
       <button onclick="cancelEdit()" class="btn-sm" style="display:block;width:100%">Cancel</button>`;
   } else if(!locked){
     if((t.rowColor==="green"||t.status==="approved")&&t.status!=="rejected")
@@ -3579,12 +3600,26 @@ function bulkOK(){
   green.forEach(t=>okTxn(t.id));
 }
 
+function saveOnlyOne(id){
+  // Save ONLY this single row — no rule created, no other rows touched
+  const t = S.txns.find(x=>x.id===id);
+  if(!t) return;
+  if(!t.accountNo){ alert("Please set an Account No. first."); return; }
+  S.txns = S.txns.map(x => x.id===id ? {...x, status:"approved", rowColor:"green"} : x);
+  S.editId = null;
+  audit("SAVE_ONE", "Single row saved: "+t.entity+" | "+(t.cleanDesc||t.description)+" | "+t.accountNo);
+  saveSession(); render();
+}
+
 async function saveAndLearn(id){
   const t=S.txns.find(x=>x.id===id);if(!t) return;
   if(!t.accountNo){alert("Please set an Account No. first.");return;}
   S.txns=S.txns.map(x=>x.id===id?{...x,status:"approved",rowColor:"green"}:x);
   S.editId=null;
-  const rule={id:`rule-${Date.now()}`,name:`Auto: ${t.rawDesc.slice(0,30)}`,descContains:t.rawDesc.slice(0,25),
+  // Use cleanDesc (vendor name) not rawDesc (full JP Morgan text) as the rule keyword
+  // This prevents "EASYSHIP FS UK LIM" from becoming the keyword when the real vendor is EVRI
+  const ruleKeyword = (t.cleanDesc||"").trim().slice(0,30) || t.rawDesc.slice(0,25);
+  const rule={id:`rule-${Date.now()}`,name:`Auto: ${ruleKeyword}`,descContains:ruleKeyword,
     type:t.type,accountType:t.accountType,accountNo:t.accountNo,
     balAccountType:t.balAccountType,balAccountNo:t.balAccountNo,
     entity:t.entity,entityAcct:t.entityAcct||""};
