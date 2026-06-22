@@ -1708,15 +1708,13 @@ function renderMaster(){
       <div><h2 style="font-size:15px;font-weight:600">Master Data</h2>
       <p style="font-size:11px;color:var(--text3)">Vendors · Customers · GL Accounts — used for transaction mapping · ${S.spStatus==="ok"?`<span style="color:var(--green);font-weight:600">● Synced with SharePoint</span>`:`<span style="color:var(--amber);font-weight:600">⚠ Local only — push to SharePoint to share with team</span>`}</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        ${canAdmin()?`
-          <button onclick="exportDataPackage()" style="background:#7c3aed;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">
-            📦 Export Data Package
-          </button>
-          <label style="background:var(--green);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;margin:0">
-            📥 Import Data Package
-            <input type="file" accept=".json" onchange="importDataPackage(this)" style="display:none">
-          </label>
-        `:""}
+        <button onclick="exportDataPackage()" style="background:#7c3aed;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">
+          📦 Export Data Package
+        </button>
+        <label style="background:var(--green);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;margin:0">
+          📥 Import Data Package
+          <input type="file" accept=".json" onchange="importDataPackage(this)" style="display:none">
+        </label>
         <button onclick="downloadTemplate('vendors')" class="btn-sm" style="background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">⬇ Vendor Template</button>
         <button onclick="downloadTemplate('customers')" class="btn-sm" style="background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">⬇ Customer Template</button>
         <button onclick="downloadTemplate('gl')" class="btn-sm" style="background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">⬇ GL Template</button>
