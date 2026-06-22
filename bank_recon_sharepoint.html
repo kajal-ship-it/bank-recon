@@ -825,6 +825,7 @@ function getFiltered(){
     if(S.filterType!=="all"&&t.type!==S.filterType) return false;
     if(S.filterCcy!=="all"&&t.currency!==S.filterCcy) return false;
     if(S.filterColor==="noacct_active") return !t.accountNo;
+    if(S.filterColor==="exported") return t.exported===true;
     if(S.filterColor!=="all"&&t.rowColor!==S.filterColor) return false;
     return true;
   });
@@ -1003,7 +1004,12 @@ function exportMonthly(){
 }
 
 function doExport(type){
-  const approved=S.txns.filter(t=>t.status==="approved"||t.status==="booked");
+  const approved=S.txns.filter(t=>(t.status==="approved"||t.status==="booked")&&!t.exported);
+  const alreadyExported=S.txns.filter(t=>t.exported).length;
+  if(alreadyExported>0&&(type==="payment"||type==="receipt"||type==="combined"||type==="all")){
+    // Show info that some are excluded
+    console.info(alreadyExported+" entries already exported — excluded from this export");
+  }
   const ents=[...new Set(S.txns.map(t=>t.entity).filter(Boolean))];
   let rows=approved, filename=`D365_Export_${today()}.csv`;
   if(type==="payment"){rows=approved.filter(t=>t.type==="Payment Journal");filename=`D365_Payment_${today()}.csv`;}
@@ -1038,6 +1044,14 @@ function doExport(type){
   }
   if(!rows.length){alert("No entries to export for this filter.");S.exportOpen=false;render();return;}
   exportCSV(rows,filename);
+  // Mark exported entries so they don't appear in next session's export
+  const exportedIds = new Set(rows.map(t=>t.id));
+  const exportedAt = new Date().toLocaleString();
+  const exportedBy = S.user?.name||"";
+  S.txns = S.txns.map(t=> exportedIds.has(t.id) ? {...t, exported:true, exportedAt, exportedBy, status:"booked"} : t);
+  ls("brp3_txns_session", S.txns);
+  audit("EXPORT", rows.length+" entries exported to D365 ("+type+") by "+exportedBy);
+  addAlert("info", exportedBy+" exported "+rows.length+" entries to D365 — marked as exported");
   S.exportOpen=false;render();
 }
 
@@ -1050,6 +1064,237 @@ function render(){
   const map={0:renderUpload,1:renderRules,2:renderMaster,3:renderRecon,4:renderDashboard,5:renderMonthly,6:renderAlerts,7:renderUserMgmt};
   el.innerHTML=(map[S.tab]||renderUpload)();
   bindEvents();
+  // Onboarding modal
+  const ob=document.getElementById("onboarding-overlay");
+  if(ob) ob.remove();
+  if(S.showOnboarding) renderOnboarding();
+  // Help panel
+  const hp=document.getElementById("help-panel");
+  if(hp) hp.remove();
+  if(S.showHelp) renderHelpPanel();
+}
+
+const HELP_CONTENT = {
+  0: {
+    title: "Upload & Review",
+    objective: "This is your daily working tab. Every morning, upload the JP Morgan bank statement CSV here. The app parses all 17 entities automatically, applies your saved rules to auto-map known vendors, and presents the remaining entries for manual review.",
+    steps: [
+      "Upload the JP Morgan CSV by dragging it onto the drop zone or clicking 'click to browse'",
+      "Click 'Bulk OK Green' to instantly approve all auto-matched (green) transactions",
+      "For remaining entries — click Edit, search for the vendor, click Save & Learn",
+      "Once all entries are approved — click Export → Payment Journal or Cash Receipt",
+      "The exported CSV goes directly into D365 journals via the import function"
+    ],
+    tips: [
+      "Green rows = auto-matched by rules (just click Bulk OK)",
+      "Amber rows = seen in a previous session, may have a partial match",
+      "Red rows = brand new, need manual mapping",
+      "Click any description to filter the table to that vendor",
+      "Use keyboard shortcuts: A = Approve, R = Reject, F = Flag, E = Edit",
+      "Exported entries are marked ✅ Exported and excluded from future exports automatically"
+    ]
+  },
+  1: {
+    title: "Rules Engine",
+    objective: "Rules are the heart of the app. Each rule says: 'whenever you see keyword X in a description, map it to vendor Y'. Once a rule is saved, every future upload applies it instantly — no manual mapping needed for that vendor ever again.",
+    steps: [
+      "Create a rule: fill in Rule Name, Keyword (from the bank description), Account Type, and Account No.",
+      "Click Save Rule — it applies immediately to all current pending transactions",
+      "Or: in Upload & Review, click a description → click 'Create rule for...' — the form pre-fills",
+      "Use the entity/bank filter dropdowns to find rules for a specific account",
+      "The Matches column shows how many transactions in the current upload match each rule"
+    ],
+    tips: [
+      "Always use Save & Learn in Upload tab — it creates a rule automatically",
+      "Rules with 0 matches may be for a vendor that hasn't appeared this session",
+      "Be specific with keywords — 'DHL' is safer than 'D' which might match other vendors",
+      "You can make rules entity-specific so the same keyword maps differently per entity"
+    ]
+  },
+  2: {
+    title: "Master Data",
+    objective: "Master Data is your vendor/GL account library. Before the team can map any transaction, the vendor list and GL accounts must be loaded here. This is a one-time setup — import once, then the whole team shares the same data.",
+    steps: [
+      "Import vendors: click Choose File next to Vendors → select vendors_final.csv",
+      "Import GL accounts: click Choose File next to GL Accounts → select gl_final.csv",
+      "To share with teammates: click 📦 Export Data Package → share the JSON file",
+      "Teammates click 📥 Import Data Package → select the JSON → done in 10 seconds",
+      "To add a new vendor: fill in the form at the top → click Add → Admin approves"
+    ],
+    tips: [
+      "Import the data package first before uploading any CSV — otherwise dropdowns will be empty",
+      "Re-export and re-share the data package whenever new vendors are added",
+      "Search vendors by name or number using the search box",
+      "New vendors submitted by Users go into a pending queue until Admin approves"
+    ]
+  },
+  3: {
+    title: "Reconciliation",
+    objective: "Reconciliation is where you confirm the bank balance matches what you've booked. Every day, enter the closing balance from JP Morgan for each entity. The app calculates the expected balance from your bookings and shows the variance instantly. The target is ✅ BALANCED on every entity card by end of day.",
+    steps: [
+      "Set opening balance once at the start of each month: click 'Set Opening Balances' → filter by entity → enter balance",
+      "Every day: click 'Enter Today's Balances' → filter by your entity → type the JP Morgan closing balance",
+      "If there's a variance — click the entity card → review transactions → find what's wrong",
+      "Admin: to void a wrong entry — open entity card → Select booked → click Void Selected",
+      "Voided entries are excluded from balance calculations immediately"
+    ],
+    tips: [
+      "Filter by entity or currency to see only your accounts — don't accidentally enter someone else's balance",
+      "Opening balance only needs to be set ONCE per month — it carries forward automatically",
+      "If opening balance is wrong, just retype it — everyone can edit it (since data isn't shared yet)",
+      "Variance of $0 = BALANCED ✅. Any other number = investigate before closing"
+    ]
+  },
+  4: {
+    title: "Team Dashboard",
+    objective: "The Dashboard is your morning briefing. Open it first every day to see what needs attention — how many entries need mapping, which entities have balances missing, and how the team is performing on the KPI.",
+    steps: [
+      "Check the briefing cards at the top — click any card to jump to the relevant tab filtered",
+      "Use the date filter to see Today / This week / This month performance",
+      "Check the Entity Risk Score table — Red entities need urgent attention",
+      "Bank Balance Accuracy shows who entered balances and how many matched"
+    ],
+    tips: [
+      "Check Dashboard before starting work — it tells you exactly what to do first",
+      "Risk Score uses 3 factors: unmapped %, duplicate payments, and variance days",
+      "Click 'Need Mapping' card to jump directly to Upload tab showing only pending entries"
+    ]
+  },
+  5: {
+    title: "Monthly Summary",
+    objective: "Monthly Summary gives a high-level view of credits, debits, net flow, and running cash position per entity per month. This is the report Marta uses for management reporting.",
+    steps: [
+      "Filter by entity using the dropdown to focus on one entity at a time",
+      "Running Balance column shows cumulative cash position based on opening balance + net flow",
+      "Export CSV for use in management reports or for sharing with Marta"
+    ],
+    tips: [
+      "Voided entries are automatically excluded from all totals",
+      "If running balance looks wrong, check that opening balance is set correctly in Reconciliation tab",
+      "Booking % shows how complete the reconciliation is for that month"
+    ]
+  },
+  6: {
+    title: "Alert History",
+    objective: "Alert History captures everything that needs your attention — duplicate payments, unmapped entries, team actions, and system warnings. Check this regularly to catch potential errors before they reach D365.",
+    steps: [
+      "Review the Duplicate Payments card — if count > 0, investigate before exporting",
+      "Click 'Detailed Export' for a full report with all 5 sections including exact transaction details",
+      "Admin: click 'Clear old alerts' to archive read alerts and keep the list clean"
+    ],
+    tips: [
+      "Duplicate = same vendor, same amount, within 7 days. May be genuine or a double-payment",
+      "Unmapped entries card links directly to Upload tab filtered to show only missing accounts",
+      "All team actions (exports, voids, approvals) are logged here with name and timestamp"
+    ]
+  },
+  7: {
+    title: "User Management",
+    objective: "User Management controls who has access and what they can do. Admin can see all team members, their roles, and their passwords. Users can change their own password here.",
+    steps: [
+      "Admin: click Edit to change a user's name or role",
+      "Admin: click Reset PW to set a new password for any user",
+      "Admin: passwords are visible in the Password column for account recovery",
+      "Users: use the 'Change My Password' form to set a personal password"
+    ],
+    tips: [
+      "Admin (Kajal) can always log into any account — the password is always visible",
+      "When changing your password, choose something memorable — there's no email reset",
+      "Role determines what tabs and buttons are visible in the app"
+    ]
+  }
+};
+
+function renderHelpPanel(){
+  const help = HELP_CONTENT[S.tab] || HELP_CONTENT[0];
+  const div = document.createElement("div");
+  div.id = "help-panel";
+  div.style.cssText = "position:fixed;right:0;top:0;bottom:0;width:380px;background:var(--surface);border-left:1px solid var(--border);z-index:400;overflow-y:auto;box-shadow:-8px 0 32px rgba(0,0,0,.2)";
+  div.innerHTML = `
+    <div style="padding:20px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:var(--surface);z-index:1">
+      <div>
+        <div style="font-size:10px;font-weight:600;color:var(--blue);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:2px">Help Guide</div>
+        <div style="font-size:15px;font-weight:700;color:var(--text)">${help.title}</div>
+      </div>
+      <button onclick="S.showHelp=false;render()" style="background:none;border:1px solid var(--border);border-radius:8px;padding:4px 10px;cursor:pointer;color:var(--text3);font-size:12px">✕ Close</button>
+    </div>
+    <div style="padding:20px 24px">
+      <!-- Objective -->
+      <div style="background:rgba(26,86,219,.06);border-left:3px solid var(--blue);border-radius:0 8px 8px 0;padding:12px 14px;margin-bottom:20px">
+        <div style="font-size:10px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">🎯 What this tab does</div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.7">${help.objective}</div>
+      </div>
+      <!-- Steps -->
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">How to use it</div>
+        ${help.steps.map((s,i)=>`
+          <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:12px">
+            <div style="width:22px;height:22px;border-radius:50%;background:var(--blue);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;flex-shrink:0;margin-top:1px">${i+1}</div>
+            <div style="font-size:13px;color:var(--text2);line-height:1.6">${s}</div>
+          </div>
+        `).join("")}
+      </div>
+      <!-- Tips -->
+      <div style="background:var(--surface2);border-radius:10px;padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">💡 Tips</div>
+        ${help.tips.map(t=>`
+          <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px">
+            <div style="color:var(--blue);font-size:14px;flex-shrink:0;margin-top:1px">→</div>
+            <div style="font-size:12px;color:var(--text3);line-height:1.6">${t}</div>
+          </div>
+        `).join("")}
+      </div>
+      <!-- Navigation hint -->
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);text-align:center">
+        The help panel updates automatically as you switch tabs
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+}
+
+function renderOnboarding(){
+  const steps=[
+    {icon:"📦",title:"Step 1 — Import Your Data",desc:"Before anything else, import the data package that Kajal shared with you. Go to Master Data → click Import Data Package → select the JSON file. This loads all 864 vendors, GL accounts, and rules into your app.",action:"Go to Master Data",tab:2},
+    {icon:"☁",title:"Step 2 — Upload Today's CSV",desc:"Download the bank statement from JP Morgan (Excel format), delete the Filters/Summary/Other Balance sheets, keep only the Details sheet, save as CSV. Then come back here and drag it onto the upload zone.",action:"Go to Upload & Review",tab:0},
+    {icon:"✅",title:"Step 3 — Map & Export",desc:"After uploading, click Bulk OK Green to approve auto-matched entries. Manually map any remaining ones using the Edit button. Then Export to D365 to get your Payment Journal and Cash Receipt files.",action:"Go to Upload & Review",tab:0},
+  ];
+  const s=steps[S.onboardingStep-1];
+  const div=document.createElement("div");
+  div.id="onboarding-overlay";
+  div.style.cssText="position:fixed;inset:0;background:rgba(10,15,30,.85);z-index:500;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)";
+  div.innerHTML=`
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:40px;max-width:560px;width:90%;box-shadow:0 24px 64px rgba(0,0,0,.4)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">
+        <div>
+          <div style="font-size:11px;font-weight:600;color:var(--blue);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px">Welcome to Easyship Bank Recon</div>
+          <div style="font-size:20px;font-weight:700;color:var(--text)">Getting Started</div>
+        </div>
+        <button onclick="S.showOnboarding=false;render()" style="background:none;border:1px solid var(--border);border-radius:8px;padding:6px 12px;cursor:pointer;color:var(--text3);font-size:12px">Skip for now</button>
+      </div>
+      <!-- Steps indicator -->
+      <div style="display:flex;gap:8px;margin-bottom:28px">
+        ${steps.map((_,i)=>`<div style="flex:1;height:4px;border-radius:2px;background:${i<S.onboardingStep?"var(--blue)":"var(--border)"}"></div>`).join("")}
+      </div>
+      <!-- Current step -->
+      <div style="text-align:center;padding:24px;background:rgba(26,86,219,.06);border:1px solid rgba(26,86,219,.15);border-radius:14px;margin-bottom:24px">
+        <div style="font-size:48px;margin-bottom:14px">${s.icon}</div>
+        <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:10px">${s.title}</div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.7">${s.desc}</div>
+      </div>
+      <!-- Navigation -->
+      <div style="display:flex;gap:12px;justify-content:space-between;align-items:center">
+        <button onclick="${S.onboardingStep>1?"S.onboardingStep--;render()":"S.showOnboarding=false;render()"}" 
+          style="background:none;border:1px solid var(--border);border-radius:8px;padding:10px 20px;cursor:pointer;color:var(--text2);font-size:13px">
+          ${S.onboardingStep>1?"← Back":"Cancel"}
+        </button>
+        <span style="font-size:12px;color:var(--text3)">${S.onboardingStep} of ${steps.length}</span>
+        <button onclick="${S.onboardingStep<steps.length?"S.onboardingStep++;render()":"S.showOnboarding=false;S.tab="+s.tab+";render()"}"
+          style="background:var(--blue);color:#fff;border:none;border-radius:8px;padding:10px 24px;cursor:pointer;font-size:13px;font-weight:600">
+          ${S.onboardingStep<steps.length?"Next →":s.action+" →"}
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
 }
 
 function renderSidebar(){
@@ -1208,6 +1453,15 @@ function _renderUploadInner(){
   }
 
   if(S.txns.length===0) return html;
+  // Show exported entries banner
+  const exportedCount = S.txns.filter(t=>t.exported).length;
+  if(exportedCount>0){
+    html+=`<div style="background:rgba(13,122,78,.08);border:1px solid rgba(13,122,78,.2);border-radius:var(--radius);padding:8px 14px;margin-bottom:8px;display:flex;gap:10px;align-items:center;font-size:12px">
+      <span style="color:var(--green);font-weight:700">✅ ${exportedCount} entries already exported to D365</span>
+      <span style="color:var(--text3)">— excluded from future exports automatically</span>
+      <button onclick="S.filterColor='exported';render()" class="btn-xs" style="margin-left:auto;background:var(--green-lt);color:var(--green);border-color:var(--green-bd)">View exported</button>
+    </div>`;
+  }
 
   const pct=s.total>0?Math.round((s.booked+s.approved)/s.total*100):0;
   const selCount=S.selectedTxns.size;
@@ -2971,6 +3225,22 @@ function saveEditUser(uid){
   ls("brp3_users",USERS);
   audit("USER_EDIT",`ID ${uid} → name=${name} role=${role}`);
   closeModal(); render();
+}
+
+function changeMyPassword(){
+  var current = document.getElementById("cp-current")?.value;
+  var newpw = document.getElementById("cp-new")?.value;
+  var confirm = document.getElementById("cp-confirm")?.value;
+  var me = USERS.find(u=>u.id===S.user.id);
+  if(!me) return;
+  if(current !== me.password){ alert("❌ Current password is incorrect."); return; }
+  if(!newpw || newpw.length < 6){ alert("❌ New password must be at least 6 characters."); return; }
+  if(newpw !== confirm){ alert("❌ Passwords do not match."); return; }
+  USERS = USERS.map(u=>u.id===S.user.id ? {...u, password:newpw} : u);
+  ls("brp3_users", USERS);
+  audit("CHANGE_PW", S.user.name+" changed their own password");
+  alert("✅ Password changed successfully! Your admin can always see your new password for account recovery.");
+  render();
 }
 
 function resetPassword(uid){
