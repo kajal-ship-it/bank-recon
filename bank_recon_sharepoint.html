@@ -423,6 +423,21 @@ const STRIPE_ACCOUNTS = [
   {name:"GOSINCRO TRANSPORTATION INC.",      no:"STRIPE-GST", label:"STRIPE ···GST"},
 ];
 
+const PAYPAL_ACCOUNTS = [
+  {name:"Goeasyship Fulfillment Service NL", no:"PAYPAL-NL",  label:"PAYPAL ···NL"},
+  {name:"Easyship FS UK Limited",            no:"PAYPAL-UK",  label:"PAYPAL ···UK"},
+  {name:"Easyship PTE.LTD (Singapore)",      no:"PAYPAL-SG",  label:"PAYPAL ···SG"},
+  {name:"Easyship fulf.Serv Pty Ltd AU",     no:"PAYPAL-AU",  label:"PAYPAL ···AU"},
+  {name:"EASYSHIP FULFIL.SPTY LTD(NZ)",      no:"PAYPAL-NZ",  label:"PAYPAL ···NZ"},
+  {name:"Easyship Fulfillment Srvs HK",      no:"PAYPAL-HK",  label:"PAYPAL ···HK"},
+  {name:"Easyship Inc",                      no:"PAYPAL-US",  label:"PAYPAL ···US"},
+  {name:"Enovie Simple Canada Inc.",         no:"PAYPAL-CA",  label:"PAYPAL ···CA"},
+  {name:"GOSINCRO CANADA INC.",              no:"PAYPAL-GSC", label:"PAYPAL ···GSC"},
+  {name:"Go Sincro UK Limited",             no:"PAYPAL-GSU", label:"PAYPAL ···GSU"},
+  {name:"Go Sincro Inc.",                    no:"PAYPAL-GSI", label:"PAYPAL ···GSI"},
+  {name:"GOSINCRO TRANSPORTATION INC.",      no:"PAYPAL-GST", label:"PAYPAL ···GST"},
+];
+
 const SKIP_PATTERNS = [
   "OPENING LEDGER BALANCE","OPENING AVAILABLE BALANCE","CLOSING LEDGER BALANCE",
   "CLOSING BALANCE SAME DAY","CLOSING AVAILABLE BALANCE","AVG CLOSING AVAILABLE BAL MTD",
@@ -469,6 +484,7 @@ let S = {
   editId:null, editOriginal:null, exportOpen:false, masterTab:"vendors",
   newMaster:{entity:"",no:"",name:"",currency:""},
   masterMsg:"", masterFilter:"all", masterSearch:"", selectedMasterItems:new Set(),
+  masterBankFilter:"all", masterBankSearch:"",
   newRule:{name:"",descContains:"",entity:"",entityAcct:"",type:"",
     accountType:"Vendor",accountNo:"",balAccountType:"Bank Account",balAccountNo:""},
   ruleMsg:"", ruleFilter:{entity:"",bank:"",keyword:""},
@@ -766,17 +782,22 @@ function isIntercompany(t){
 
 // Get bank accounts for entity
 function getBankAccounts(entityName){
-  // If no entity specified, return ALL bank accounts across all entities
   if(!entityName){
-    const all = allEntities().map(e=>({no:e.account, name:e.bankName+" ("+e.name+")", entity:e.name}));
-    const stripes = STRIPE_ACCOUNTS.map(s=>({no:s.no, name:s.label+" ("+s.name+")", entity:s.name}));
-    return [...all,...stripes];
+    const all      = allEntities().map(e=>({no:e.account, name:e.bankName+" ("+e.name+")", entity:e.name}));
+    const stripes  = STRIPE_ACCOUNTS.map(s=>({no:s.no, name:s.label+" ("+s.name+")", entity:s.name}));
+    const paypals  = PAYPAL_ACCOUNTS.map(p=>({no:p.no, name:p.label+" ("+p.name+")", entity:p.name}));
+    const customs  = (S.bankAccounts||[]).map(b=>({no:b.no, name:b.name+" ("+b.entity+")", entity:b.entity}));
+    return [...all,...stripes,...paypals,...customs];
   }
   const entAccts = allEntities().filter(e=>e.name===entityName)
     .map(e=>({no:e.account, name:e.bankName, entity:entityName}));
-  const stripe = STRIPE_ACCOUNTS.filter(s=>s.name===entityName)
+  const stripe   = STRIPE_ACCOUNTS.filter(s=>s.name===entityName)
     .map(s=>({no:s.no, name:s.label, entity:entityName}));
-  return [...entAccts,...stripe];
+  const paypal   = PAYPAL_ACCOUNTS.filter(p=>p.name===entityName)
+    .map(p=>({no:p.no, name:p.label, entity:entityName}));
+  const customs  = (S.bankAccounts||[]).filter(b=>b.entity===entityName)
+    .map(b=>({no:b.no, name:b.name, entity:entityName}));
+  return [...entAccts,...stripe,...paypal,...customs];
 }
 
 // Get search pool for account type
@@ -2108,6 +2129,7 @@ function exportDataPackage(){
     glAccounts: S.glAccounts,
     customers: S.customers,
     rules: S.rules,
+    bankAccounts: S.bankAccounts||[],
     extraEntities: S.extraEntities||[]
   };
   var blob = new Blob([JSON.stringify(pkg, null, 2)], {type:"application/json"});
@@ -2138,15 +2160,17 @@ function importDataPackage(input){
         "• "+pkg.rules.length+" rules\n\n"+
         "Your current transactions and bookings will NOT be affected.";
       if(!confirm(msg)) return;
-      S.vendors = pkg.vendors||[];
-      S.glAccounts = pkg.glAccounts||[];
-      S.customers = pkg.customers||[];
-      S.rules = pkg.rules||[];
+      S.vendors      = pkg.vendors||[];
+      S.glAccounts   = pkg.glAccounts||[];
+      S.customers    = pkg.customers||[];
+      S.rules        = pkg.rules||[];
+      S.bankAccounts = pkg.bankAccounts||[];
       if(pkg.extraEntities) S.extraEntities = pkg.extraEntities;
       ls("brp3_vendors",S.vendors);
       ls("brp3_gl",S.glAccounts);
       ls("brp3_customers",S.customers);
       ls("brp3_rules",S.rules);
+      ls("brp3_banks",S.bankAccounts);
       if(pkg.extraEntities) ls("brp3_entities",S.extraEntities);
       audit("IMPORT_PACKAGE","Imported data package from "+pkg.exportedBy+": "+S.vendors.length+"v "+S.glAccounts.length+"g "+S.rules.length+"r");
       addAlert("info","Data package imported successfully — "+S.vendors.length+" vendors, "+S.glAccounts.length+" GL accounts, "+S.rules.length+" rules ready");
@@ -3401,20 +3425,7 @@ function clearAndReupload(){
 }
 
 function addDefaultRules(){
-  // Only add if not already present
-  const exists=function(kw){return S.rules.some(function(r){return (r.descContains||"").toLowerCase()===kw.toLowerCase();});};
-  var added=false;
-  var defaultRules=[
-    {name:"Book Transfer (Intercompany)",descContains:"BOOK TRANSFER",type:"",accountType:"IC Partner",accountNo:"",balAccountType:"Bank Account",balAccountNo:"",entity:"",entityAcct:""},
-    {name:"Stripe Payments",descContains:"STRIPE",type:"Cash Receipt",accountType:"Customer",accountNo:"",balAccountType:"Bank Account",balAccountNo:"",entity:"",entityAcct:""},
-  ];
-  defaultRules.forEach(function(r){
-    if(!exists(r.descContains)){
-      S.rules.push(Object.assign({id:"rule-default-"+Date.now()+Math.random(),isDefault:true},r));
-      added=true;
-    }
-  });
-  if(added){ls("brp3_rules",S.rules);}
+  // Default rules removed — users create their own rules via Save & Learn
 }
 
 function loadCarryForward(){
